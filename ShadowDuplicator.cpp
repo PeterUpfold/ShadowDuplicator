@@ -15,7 +15,8 @@ int main()
 {
 
     IVssBackupComponents* backupComponents = nullptr;
-    HRESULT result;
+    IVssAsync* vssAsync = nullptr;
+    HRESULT result = E_FAIL;
     
     result = CreateVssBackupComponents(&backupComponents);
     if (result == E_ACCESSDENIED) {
@@ -27,6 +28,25 @@ int main()
         goto bail;
     }
 
+    // InitializeForBackup
+    result = backupComponents->InitializeForBackup();
+    if (result != S_OK) {
+        printf("Result of InitializeForBackup was %x", result);
+        goto bail;
+    }
+
+
+    // gather writer metadata
+    result = backupComponents->GatherWriterMetadata(&vssAsync);
+    if (result != S_OK) {
+        printf("Result of GatherWriterMetadata was %x", result);
+
+        // do I need to release the vssAsync?
+        goto bail;
+    }
+
+
+    // completion of setup
     result = backupComponents->SetBackupState(false, false, VSS_BT_FULL, false);
     if (result != S_OK) {
         printf("Result of SetBackupState was %x", result);
