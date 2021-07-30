@@ -8,6 +8,7 @@
 #include <vss.h>
 #include <vswriter.h>
 #include <vsbackup.h>
+#include <cassert>
 
 
 int main()
@@ -23,7 +24,17 @@ int main()
     }
     if (result != S_OK) {
         printf("Result of CreateVssBackupComponents was %x", result);
+        goto bail;
     }
 
-    std::cout << "Hello World!\n";
+    result = backupComponents->SetBackupState(false, false, VSS_BT_FULL, false);
+    if (result != S_OK) {
+        printf("Result of SetBackupState was %x", result);
+        goto bail;
+    }
+
+    assert(backupComponents != nullptr);
+
+    bail:
+    backupComponents->Release();
 }
