@@ -8,3 +8,4 @@
 
 void genericFailCheck(const char* operationName, HRESULT result);
 void bail(HRESULT exitCode);
+void banner(void);

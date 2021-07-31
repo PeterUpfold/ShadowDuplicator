@@ -9,6 +9,7 @@
 #include <vswriter.h>
 #include <vsbackup.h>
 #include <cassert>
+#include <strsafe.h>
 #include "ShadowDuplicator.h"
 
 IVssBackupComponents* backupComponents = nullptr;
@@ -16,19 +17,25 @@ IVssAsync* vssAsync = nullptr;
 VSS_ID* snapshotSetId = nullptr;
 VSS_ID* snapshotId = nullptr;
 
-int main()
+#define SHORT_SLEEP 500
+#define LONG_SLEEP 1500
+
+int main(int argc, char** argv)
 {
     HRESULT result = E_FAIL;
     HRESULT asyncResult = E_FAIL;
-    
+    VSS_SNAPSHOT_PROP snapshotProp{};
+
     // initialize COM (must do before InitializeForBackup works)
     result = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+
+    banner();
 
     if (result != S_OK) {
         printf("Unable to initialize COM -- 0x%x\n", result);
         exit(result);
     }
-    
+
     result = CreateVssBackupComponents(&backupComponents);
     if (result == E_ACCESSDENIED) {
         printf("Failed to create the VSS backup components as access was denied. Is this being run with elevated permissions?\n");
@@ -74,7 +81,7 @@ int main()
     // start a new snapshot set
 
     snapshotSetId = (VSS_ID*)malloc(sizeof(VSS_ID));
-    assert(snapshotSetId != 0); 
+    assert(snapshotSetId != 0);
 
     result = backupComponents->StartSnapshotSet(snapshotSetId);
     genericFailCheck("StartSnapshotSet", result);
@@ -91,13 +98,13 @@ int main()
     genericFailCheck("PrepareForBackup", result);
 
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
-        Sleep(500);
+        Sleep(SHORT_SLEEP);
         result = vssAsync->QueryStatus(&asyncResult, NULL);
         if (result != S_OK) {
             printf("Unable to query vss async status -- %x\n", result);
             bail(result);
         }
-        OutputDebugString(L"Waiting for PrepareForBackup VSS status...");
+        OutputDebugString(L"Waiting for PrepareForBackup VSS status...\n");
     }
 
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
@@ -106,17 +113,59 @@ int main()
     }
 
     asyncResult = E_FAIL;
-    
+
     //TODO we should verify writer status
 
-    
+
 
     // request shadow copy
+
+    printf("Asking the OS to create a shadow copy...\n");
 
     result = backupComponents->DoSnapshotSet(&vssAsync);
     genericFailCheck("DoSnapshotSet", result);
 
+    while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
+        Sleep(LONG_SLEEP);
+        result = vssAsync->QueryStatus(&asyncResult, NULL);
+        if (result != S_OK) {
+            printf("Unable to query vss async status -- %x\n", result);
+            bail(result);
+        }
+        OutputDebugString(L"Waiting for DoSnapshotSet status...\n");
+        
+    }
+
+    if (asyncResult == VSS_S_ASYNC_CANCELLED) {
+        printf("Operation was cancelled.");
+        bail(asyncResult);
+    }
+
+    asyncResult = E_FAIL;
+
     //TODO we should verify writer status 
+
+    // GetSnapshotProperties to get device to copy from
+    result = backupComponents->GetSnapshotProperties(*snapshotId, &snapshotProp);
+    genericFailCheck("GetSnapshotProperties", result);
+
+    wprintf(snapshotProp.m_pwszSnapshotDeviceObject);
+    printf("\n");
+
+    // calculate file paths
+    WCHAR sourcePath[MAX_PATH] = L"Users\\Public\\Documents\\target.txt";
+    WCHAR sourcePathWithDeviceObject[MAX_PATH] = L"";
+    WCHAR destPath[MAX_PATH] = L"C:\\Users\\Public\\Documents\\target_copied.txt";
+
+    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH, L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourcePath);
+
+    wprintf(sourcePathWithDeviceObject);
+    printf("\n");
+        
+    // copy target file to test destination
+    CopyFile(sourcePathWithDeviceObject, destPath, TRUE);
+
+    VssFreeSnapshotProperties(&snapshotProp);
 
 
     bail(0);
@@ -160,4 +209,13 @@ void bail(HRESULT exitCode) {
     backupComponents = nullptr;
     CoUninitialize();
     exit(exitCode);
+}
+
+/// <summary>
+/// An ASCII art banner because one must have one of these.
+/// </summary>
+/// <param name=""></param>
+void banner(void) {
+    printf("ShadowDuplicator -- Copyright (C) 2021 Peter Upfold\n");
+    printf("\n");
 }
