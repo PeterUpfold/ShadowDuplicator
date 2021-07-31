@@ -9,13 +9,14 @@
 #include <vswriter.h>
 #include <vsbackup.h>
 #include <cassert>
+#include "ShadowDuplicator.h"
 
+IVssBackupComponents* backupComponents = nullptr;
+IVssAsync* vssAsync = nullptr;
+VSS_ID* snapshotSetId = nullptr;
 
 int main()
 {
-
-    IVssBackupComponents* backupComponents = nullptr;
-    IVssAsync* vssAsync = nullptr;
     HRESULT result = E_FAIL;
     HRESULT asyncResult = E_FAIL;
 
@@ -32,41 +33,27 @@ int main()
         printf("Failed to create the VSS backup components as access was denied. Is this being run with elevated permissions?\n");
         exit(E_ACCESSDENIED);
     }
-    if (result != S_OK) {
-        printf("Result of CreateVssBackupComponents was %x\n", result);
-        goto bail;
-    }
+    genericFailCheck("CreateVssBackupComponents", result);
 
     assert(backupComponents != nullptr);
 
     // InitializeForBackup
-    /*
-    */
     result = backupComponents->InitializeForBackup();
-    if (result != S_OK) {
-        printf("Result of InitializeForBackup was %x\n", result);
-        goto bail;
-    }
-
+    genericFailCheck("InitializeForBackup", result);
 
     // gather writer metadata
     result = backupComponents->GatherWriterMetadata(&vssAsync);
-    if (result != S_OK) {
-        printf("Result of GatherWriterMetadata was %x\n", result);
-        goto bail;
-    }
+    genericFailCheck("GatherWriterMetadata", result);
 
     // we must await the result
     assert(vssAsync != nullptr);
-
-    
 
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
         Sleep(500);
         result = vssAsync->QueryStatus(&asyncResult, NULL);
         if (result != S_OK) {
             printf("Unable to query vss async status -- %x\n", result);
-            goto bail;
+            bail(result);
         }
         OutputDebugString(L"Waiting for async VSS status...");
     }
@@ -75,67 +62,96 @@ int main()
 
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
         printf("Operation was cancelled.");
-        goto bail;
+        bail(result);
     }
 
     asyncResult = E_FAIL;
 
     // completion of setup
     result = backupComponents->SetBackupState(false, false, VSS_BT_FULL, false);
-    if (result != S_OK) {
-        printf("Result of SetBackupState was %x\n", result);
-        goto bail;
+    genericFailCheck("SetBackupState", result);
+
+    // start a new snapshot set
+
+    snapshotSetId = (VSS_ID*)malloc(sizeof(VSS_ID));
+    if (snapshotSetId == nullptr) {
+        printf("Failed to allocate memory for the snapshotSetId\n");
+        bail(255);
     }
+
+    assert(snapshotSetId != 0); // to quiet down the warning
+
+    result = backupComponents->StartSnapshotSet(snapshotSetId);
+    genericFailCheck("StartSnapshotSet", result);
+
+    // add volume to snapshot set AddToSnapshotSet
 
     // notify writers of impending backup
     result = backupComponents->PrepareForBackup(&vssAsync);
-
-    if (result != S_OK) {
-        printf("Result of PrepareForBackup was %x\n", result);
-        goto bail;
-    }
+    genericFailCheck("PrepareForBackup", result);
 
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
         Sleep(500);
         result = vssAsync->QueryStatus(&asyncResult, NULL);
         if (result != S_OK) {
             printf("Unable to query vss async status -- %x\n", result);
-            goto bail;
+            bail(result);
         }
         OutputDebugString(L"Waiting for PrepareForBackup VSS status...");
     }
 
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
         printf("Operation was cancelled.");
-        goto bail;
+        bail(asyncResult);
     }
 
     asyncResult = E_FAIL;
     
     //TODO we should verify writer status
 
-    //TODO add volume to snapshot set AddToSnapshotSet
+    
 
     // request shadow copy
 
     result = backupComponents->DoSnapshotSet(&vssAsync);
-
-    if (result != S_OK) {
-        printf("Result of DoSnapshotSet was %x\n", result);
-        goto bail;
-    }
+    genericFailCheck("DoSnapshotSet", result);
 
     //TODO we should verify writer status 
 
 
+}
 
-bail:
+/// <summary>
+/// Perform a generic check for the HRESULT S_OK, and bail out if it is not S_OK.
+/// </summary>
+/// <param name="operationName">Human-readable operation name or function call</param>
+/// <param name="result">The operation result</param>
+void genericFailCheck(const char* operationName, HRESULT result) {
+    if (result != S_OK) {
+        printf("Result of %s was 0x%x\n", operationName, result);
+        bail(result);
+    }
+}
+
+/// <summary>
+/// Tidy up any objects and uninitialize before an exit.
+/// </summary>
+/// <param name="exitCode">The exit code to provide to the OS.</param>
+void bail(HRESULT exitCode) {
     printf("Bail\n");
+
+    if (snapshotSetId != nullptr) {
+        //TODO release
+        snapshotSetId = nullptr;
+    }
 
     if (vssAsync != nullptr) {
         vssAsync->Release();
         vssAsync = nullptr;
     }
+
     backupComponents->Release();
     backupComponents = nullptr;
+    CoUninitialize();
+    exit(exitCode);
 }
