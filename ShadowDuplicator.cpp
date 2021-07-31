@@ -14,12 +14,13 @@
 IVssBackupComponents* backupComponents = nullptr;
 IVssAsync* vssAsync = nullptr;
 VSS_ID* snapshotSetId = nullptr;
+VSS_ID* snapshotId = nullptr;
 
 int main()
 {
     HRESULT result = E_FAIL;
     HRESULT asyncResult = E_FAIL;
-
+    
     // initialize COM (must do before InitializeForBackup works)
     result = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
@@ -58,8 +59,7 @@ int main()
         OutputDebugString(L"Waiting for async VSS status...");
     }
 
-    printf("Got async result final: %x\n", asyncResult);
-
+    //printf("Got async result final: %x\n", asyncResult);
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
         printf("Operation was cancelled.");
         bail(result);
@@ -73,18 +73,23 @@ int main()
 
     // start a new snapshot set
 
-    snapshotSetId = (VSS_ID*)malloc(sizeof(VSS_ID));
-    if (snapshotSetId == nullptr) {
-        printf("Failed to allocate memory for the snapshotSetId\n");
-        bail(255);
-    }
+    //snapshotSetId = (VSS_ID*)malloc(sizeof(VSS_ID));
+    //if (snapshotSetId == nullptr) {
+    //    printf("Failed to allocate memory for the snapshotSetId\n");
+    //    bail(255);
+    //}
 
-    assert(snapshotSetId != 0); // to quiet down the warning
+    //assert(snapshotSetId != 0); // to quiet down the compile time warning on StartSnapshotSet invocation
 
-    result = backupComponents->StartSnapshotSet(snapshotSetId);
-    genericFailCheck("StartSnapshotSet", result);
+    /*result = backupComponents->StartSnapshotSet(snapshotSetId);
+    genericFailCheck("StartSnapshotSet", result);*/
+
+    snapshotId = (VSS_ID*)malloc(sizeof(VSS_ID));
+    assert(snapshotId != nullptr);
 
     // add volume to snapshot set AddToSnapshotSet
+    result = backupComponents->AddToSnapshotSet((WCHAR*)L"C:\\", GUID_NULL, snapshotId);
+    genericFailCheck("AddToSnapshotSet", result);
 
     // notify writers of impending backup
     result = backupComponents->PrepareForBackup(&vssAsync);
@@ -119,6 +124,7 @@ int main()
     //TODO we should verify writer status 
 
 
+    bail(0);
 }
 
 /// <summary>
@@ -141,8 +147,13 @@ void bail(HRESULT exitCode) {
     printf("Bail\n");
 
     if (snapshotSetId != nullptr) {
-        //TODO release
+        free(snapshotSetId);
         snapshotSetId = nullptr;
+    }
+
+    if (snapshotId != nullptr) {
+        free(snapshotId);
+        snapshotId = nullptr;
     }
 
     if (vssAsync != nullptr) {
