@@ -73,16 +73,11 @@ int main()
 
     // start a new snapshot set
 
-    //snapshotSetId = (VSS_ID*)malloc(sizeof(VSS_ID));
-    //if (snapshotSetId == nullptr) {
-    //    printf("Failed to allocate memory for the snapshotSetId\n");
-    //    bail(255);
-    //}
+    snapshotSetId = (VSS_ID*)malloc(sizeof(VSS_ID));
+    assert(snapshotSetId != 0); 
 
-    //assert(snapshotSetId != 0); // to quiet down the compile time warning on StartSnapshotSet invocation
-
-    /*result = backupComponents->StartSnapshotSet(snapshotSetId);
-    genericFailCheck("StartSnapshotSet", result);*/
+    result = backupComponents->StartSnapshotSet(snapshotSetId);
+    genericFailCheck("StartSnapshotSet", result);
 
     snapshotId = (VSS_ID*)malloc(sizeof(VSS_ID));
     assert(snapshotId != nullptr);
