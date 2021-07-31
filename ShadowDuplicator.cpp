@@ -28,7 +28,14 @@ int main()
         goto bail;
     }
 
+    assert(backupComponents != nullptr);
+
     // InitializeForBackup
+    /*
+    this actually works if NT AUTHORITY\SYSTEM -- need permissions in Computer\HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VSS\VssAccessControl ??
+
+    This step will fail with 0x80042302 otherwise.
+    */
     result = backupComponents->InitializeForBackup();
     if (result != S_OK) {
         printf("Result of InitializeForBackup was %x", result);
@@ -53,7 +60,7 @@ int main()
         goto bail;
     }
 
-    assert(backupComponents != nullptr);
+    
 
     bail:
     backupComponents->Release();
