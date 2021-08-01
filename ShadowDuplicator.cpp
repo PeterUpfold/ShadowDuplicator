@@ -4,6 +4,10 @@ locked files
 Copyright (C) 2021 Peter Upfold.
 
 Licensed under the Apache 2.0 Licence. See the LICENSE file in the project root for details.
+
+This code is **not** production quality. There is certainly plenty of potential for improvement of this code,
+but beyond that, it may even be insecure, destructive or cause you other serious problems. There 
+is no warranty.
 */
 
 
@@ -17,10 +21,66 @@ Licensed under the Apache 2.0 Licence. See the LICENSE file in the project root 
 #include <strsafe.h>
 #include "ShadowDuplicator.h"
 
+/// <summary>
+/// The backup components VSS object.
+/// </summary>
 IVssBackupComponents* backupComponents = nullptr;
+
+/// <summary>
+/// An object used to query status of async operations within VSS.
+/// </summary>
 IVssAsync* vssAsync = nullptr;
+
+/// <summary>
+/// The snapshot set overall has a GUID.
+/// </summary>
 VSS_ID* snapshotSetId = nullptr;
+
+/// <summary>
+/// The GUID of a snapshot within the set.
+/// </summary>
 VSS_ID* snapshotId = nullptr;
+
+/// <summary>
+/// The source directory to back up.
+/// </summary>
+LPSTR sourceDirectory = nullptr;
+
+/// <summary>
+/// The destination directory where backed up files should be copied.
+/// </summary>
+LPSTR destDirectory = nullptr;
+
+/// <summary>
+/// Wide string version of source directory to back up.
+/// </summary>
+LPWSTR sourceDirectoryWide = nullptr;
+
+/// <summary>
+/// The source directory without the drive specifier.
+/// </summary>
+LPWSTR sourceDirectoryWithoutDrive = nullptr;
+
+/// <summary>
+/// Wide string version of destination directory.
+/// </summary>
+LPWSTR destDirectoryWide = nullptr;
+
+/// <summary>
+/// The source drive of which to make a shadow copy.
+/// </summary>
+LPSTR sourceDrive = nullptr;
+
+/// <summary>
+/// The canonical, fully qualified path to the INI file which provides
+/// options for this execution run.
+/// </summary>
+LPSTR canonicalINIPath = nullptr;
+
+/// <summary>
+/// Keep global state for a visible spinner to show progress.
+/// </summary>
+int progressMarker = 0;
 
 #define SHORT_SLEEP 500
 #define LONG_SLEEP 1500
@@ -38,15 +98,19 @@ int main(int argc, char** argv)
     VSS_SNAPSHOT_PROP snapshotProp{};
     BOOL quiet = FALSE;
     DWORD fileAttributes = INVALID_FILE_ATTRIBUTES;
-    DWORD error = -1;
-    LPWSTR errorBuffer{};
+    DWORD error = 0;
+    LPWSTR errorBuffer = nullptr;
+
+    WIN32_FIND_DATA findData{};
+
+    //TODO asserts aren't in release builds
 
     // loop over command line options -- _very_ simple parsing
     if (argc < 2) {
         usage();
         exit(0);
     }
-    for (int i = 0; i < argc; i++) {
+    for (int i = 1; i < argc; i++) {
         if (argv[i] == "/?") {
             usage();
             exit(0);
@@ -54,7 +118,7 @@ int main(int argc, char** argv)
         // handle switches
         if (argv[i][0] == (char)"-") {
             if (argv[i] == "-q") {
-                quiet = true;
+                quiet = TRUE;
             }
             if (argv[i] == "-h" || argv[i] == "--help" || argv[i] == "-?" || argv[i] == "--usage") {
                 usage();
@@ -68,7 +132,8 @@ int main(int argc, char** argv)
             if (fileAttributes == INVALID_FILE_ATTRIBUTES) {
                 error = GetLastError();
 
-                errorBuffer = (LPWSTR)malloc(MAX_PATH);
+                errorBuffer = (LPWSTR)malloc(MAX_PATH * 2); /* wide */
+                assert(errorBuffer != nullptr);
 
                 FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                     NULL,
@@ -84,14 +149,136 @@ int main(int argc, char** argv)
 
                 exit(error);
             }
+
+            canonicalINIPath = (LPSTR)malloc(MAX_PATH);
+
+            // canonicalise path
+            if (!(GetFullPathNameA(argv[i], MAX_PATH, canonicalINIPath, NULL))) {
+                error = GetLastError();
+
+                errorBuffer = (LPWSTR)malloc(MAX_PATH * 2); /* wide */
+                assert(errorBuffer != nullptr);
+
+                FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                    NULL,
+                    error,
+                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                    errorBuffer,
+                    MAX_PATH,
+                    NULL);
+
+                wprintf(L"Failed to get full path name of specified INI file: 0x%x %s", error, errorBuffer);
+                free(errorBuffer);
+                errorBuffer = nullptr;
+
+                exit(error);
+            }
+
+            // allocate space for source and destination paths
+            sourceDirectory = (LPSTR)malloc(MAX_PATH);
+            destDirectory = (LPSTR)malloc(MAX_PATH);
+
+            assert(sourceDirectory != nullptr);
+            assert(destDirectory != nullptr);
             
+            // get source from INI
+            GetPrivateProfileStringA(
+                "FileSet",
+                "Source",
+                "",
+                sourceDirectory,
+                MAX_PATH,
+                canonicalINIPath
+            );
+
+            error = GetLastError();
+            if (error) {
+                errorBuffer = (LPWSTR)malloc(MAX_PATH*2) /* wide string */;
+                assert(errorBuffer != nullptr);
+
+                FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                    NULL,
+                    error,
+                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                    errorBuffer,
+                    MAX_PATH,
+                    NULL);
+
+                wprintf(L"Failed to import Source from INI file: 0x%x %s", error, errorBuffer);
+                free(errorBuffer);
+                errorBuffer = nullptr;
+
+                exit(error);
+            }
+
+            // get dest from INI
+            GetPrivateProfileStringA(
+                "FileSet",
+                "Destination",
+                "",
+                destDirectory,
+                MAX_PATH,
+                canonicalINIPath
+            );
+
+            error = GetLastError();
+            if (error) {
+                errorBuffer = (LPWSTR)malloc(MAX_PATH * 2) /* wide string */;
+                assert(errorBuffer != nullptr);
+
+                FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                    NULL,
+                    error,
+                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                    errorBuffer,
+                    MAX_PATH,
+                    NULL);
+
+                wprintf(L"Failed to import Destination from INI file: 0x%x %s", error, errorBuffer);
+                free(errorBuffer);
+                errorBuffer = nullptr;
+
+                exit(error);
+            }
+
+
+            // get source drive from source directory
+            sourceDrive = (LPSTR)malloc(MAX_PATH);
+            assert(sourceDrive != nullptr);
+
+            if (!GetVolumePathNameA(sourceDirectory, sourceDrive, MAX_PATH)) {
+                error = GetLastError();
+                if (error) {
+                    errorBuffer = (LPWSTR)malloc(MAX_PATH * 2) /* wide string */;
+                    assert(errorBuffer != nullptr);
+
+                    FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                        NULL,
+                        error,
+                        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                        errorBuffer,
+                        MAX_PATH,
+                        NULL);
+
+                    wprintf(L"Failed to get Source Drive from Source Directory: 0x%x %s", error, errorBuffer);
+                    free(errorBuffer);
+                    errorBuffer = nullptr;
+
+                    exit(error);
+                }
+            }
+
         }
+    }
+
+    
+
+    if (!quiet) {
+        banner();
     }
 
     // initialize COM (must do before InitializeForBackup works)
     result = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-
-    banner();
 
     if (result != S_OK) {
         printf("Unable to initialize COM -- 0x%x\n", result);
@@ -117,6 +304,7 @@ int main(int argc, char** argv)
 
     // we must await the result
     assert(vssAsync != nullptr);
+    
 
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
         Sleep(500);
@@ -152,7 +340,16 @@ int main(int argc, char** argv)
     assert(snapshotId != nullptr);
 
     // add volume to snapshot set AddToSnapshotSet
-    result = backupComponents->AddToSnapshotSet((WCHAR*)L"C:\\", GUID_NULL, snapshotId);
+    VSS_PWSZ sourceDriveWide = nullptr;
+    int sourceDriveWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, 0); // get size first
+    sourceDriveWide = (VSS_PWSZ)malloc(sourceDriveWideBufferSize*2); // alloc that size (*2 -- returns number of chars)
+    assert(sourceDriveWide != nullptr);
+    // re-run to actually get chars into buffer
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, sourceDriveWideBufferSize);
+    
+    result = backupComponents->AddToSnapshotSet(sourceDriveWide, GUID_NULL, snapshotId);
+    free(sourceDriveWide);
+    sourceDriveWide = nullptr;
     genericFailCheck("AddToSnapshotSet", result);
 
     // notify writers of impending backup
@@ -166,7 +363,10 @@ int main(int argc, char** argv)
             printf("Unable to query vss async status -- %x\n", result);
             bail(result);
         }
-        OutputDebugString(L"Waiting for PrepareForBackup VSS status...\n");
+        if (!quiet) {
+            OutputDebugString(L"Waiting for PrepareForBackup VSS status...\n");
+            spinProgress();
+        }
     }
 
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
@@ -179,10 +379,11 @@ int main(int argc, char** argv)
     //TODO we should verify writer status
 
 
-
     // request shadow copy
 
-    printf("Asking the OS to create a shadow copy...\n");
+    if (!quiet) {
+        printf("Asking the OS to create a shadow copy...\n");
+    }
 
     result = backupComponents->DoSnapshotSet(&vssAsync);
     genericFailCheck("DoSnapshotSet", result);
@@ -194,8 +395,11 @@ int main(int argc, char** argv)
             printf("Unable to query vss async status -- %x\n", result);
             bail(result);
         }
-        OutputDebugString(L"Waiting for DoSnapshotSet status...\n");
         
+        if (!quiet) {
+            OutputDebugString(L"Waiting for DoSnapshotSet status...\n");
+            spinProgress();
+        }        
     }
 
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
@@ -211,15 +415,57 @@ int main(int argc, char** argv)
     result = backupComponents->GetSnapshotProperties(*snapshotId, &snapshotProp);
     genericFailCheck("GetSnapshotProperties", result);
 
-    wprintf(snapshotProp.m_pwszSnapshotDeviceObject);
-    printf("\n");
+    OutputDebugString(snapshotProp.m_pwszSnapshotDeviceObject);
+
+    // make wide versions of source and dest
+    int sourceDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectory, -1, sourceDirectoryWide, 0);
+    sourceDirectoryWide = (LPWSTR)malloc(sourceDirectoryWideBufferSize * 2);
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectory, -1, sourceDirectoryWide, sourceDirectoryWideBufferSize);
+    int destDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destDirectory, -1, destDirectoryWide, 0);
+    destDirectoryWide = (LPWSTR)malloc(destDirectoryWideBufferSize * 2);
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destDirectory, -1, destDirectoryWide, destDirectoryWideBufferSize);
+
+    // remove the device specification (C:\) from sourceDirectoryWide, so that it concats properly into the VSS device object specification
+
+    sourceDriveWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, 0); // get size first
+    sourceDriveWide = (VSS_PWSZ)malloc(sourceDriveWideBufferSize * 2); // alloc that size (*2 -- returns number of chars)
+    assert(sourceDriveWide != nullptr);
+    // re-run to actually get chars into buffer
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, sourceDriveWideBufferSize);
+
+    sourceDirectoryWithoutDrive = (LPWSTR)malloc(wcslen(sourceDirectoryWide) * 2);
+    assert(sourceDirectoryWithoutDrive != nullptr);
+    // pull into  new string starting at sourceDriveWide position
+    wcsncpy_s(sourceDirectoryWithoutDrive,
+        wcslen(sourceDirectoryWide),
+        &sourceDirectoryWide[wcslen(sourceDriveWide)],
+        wcslen(sourceDirectoryWide) - wcslen(sourceDriveWide)
+    );
+
+    free(sourceDriveWide);
+    sourceDriveWide = nullptr;
 
     // calculate file paths
-    WCHAR sourcePath[MAX_PATH] = L"Users\\Public\\Documents\\target.txt";
     WCHAR sourcePathWithDeviceObject[MAX_PATH] = L"";
+    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH, L"%s\\%s\\", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryWithoutDrive);
+
+    // find files in directory
+    HANDLE findHandle = INVALID_HANDLE_VALUE;
+    findHandle = FindFirstFile(sourcePathWithDeviceObject, &findData);
+
+    if (findHandle == INVALID_HANDLE_VALUE) {
+        printf("Unable to find the first file in the source.\n");
+        bail(2);
+    }
+
+    do {
+        wprintf(findData.cFileName);
+        wprintf(L"\n");
+    } while (FindNextFile(findHandle, &findData) != 0);
+    
     WCHAR destPath[MAX_PATH] = L"C:\\Users\\Public\\Documents\\target_copied.txt";
 
-    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH, L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourcePath);
+    
 
     wprintf(sourcePathWithDeviceObject);
     printf("\n");
@@ -252,7 +498,37 @@ void genericFailCheck(const char* operationName, HRESULT result) {
 /// </summary>
 /// <param name="exitCode">The exit code to provide to the OS.</param>
 void bail(HRESULT exitCode) {
-    printf("Bail\n");
+    if (sourceDirectory != nullptr) {
+        free(sourceDirectory);
+        sourceDirectory = nullptr;
+    }
+
+    if (destDirectory != nullptr) {
+        free(destDirectory);
+        destDirectory = nullptr;
+    }
+    if (sourceDirectoryWide != nullptr) {
+        free(sourceDirectoryWide);
+        sourceDirectoryWide = nullptr;
+    }
+    if (sourceDirectoryWithoutDrive != nullptr) {
+        free(sourceDirectoryWithoutDrive);
+        sourceDirectoryWithoutDrive = nullptr;
+    }
+    if (destDirectoryWide != nullptr) {
+        free(destDirectoryWide);
+        destDirectoryWide = nullptr;
+    }
+
+    if (canonicalINIPath != nullptr) {
+        free(canonicalINIPath);
+        canonicalINIPath = nullptr;
+    }
+
+    if (sourceDrive != nullptr) {
+        free(sourceDrive);
+        sourceDrive = nullptr;
+    }
 
     if (snapshotSetId != nullptr) {
         free(snapshotSetId);
@@ -301,4 +577,30 @@ void usage(void) {
     printf("The path to the INI file must not begin with '-'.\n");
     printf("The INI file should be as follows:\n");
     printf("TODO\n");
+}
+
+/// <summary>
+/// Update a progress spinner.
+/// </summary>
+/// <param name=""></param>
+void spinProgress(void) {
+    switch (progressMarker) {
+    case 0:
+        printf("/ \r");
+        break;
+    case 1:
+        printf("- \r");
+        break;
+    case 2:
+        printf("\\ \r");
+        break;
+    case 3:
+        printf("| \r");
+        break;
+    }
+
+    progressMarker++;
+    if (progressMarker > 3) {
+        progressMarker = 0;
+    }
 }

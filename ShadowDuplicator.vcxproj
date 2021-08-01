@@ -150,6 +150,9 @@
   <ItemGroup>
     <ClInclude Include="ShadowDuplicator.h" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Example.ini" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
