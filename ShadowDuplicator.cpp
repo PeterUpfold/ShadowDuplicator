@@ -1,5 +1,10 @@
-// ShadowDuplicator.cpp : This file contains the 'main' function. Program execution begins and ends there.
-//
+/* ShadowDuplicator -- a simple VC++ Volume Shadow Copy requestor for backing up
+locked files
+
+Copyright (C) 2021 Peter Upfold.
+
+Licensed under the Apache 2.0 Licence. See the LICENSE file in the project root for details.
+*/
 
 
 #include <iostream>
@@ -20,11 +25,68 @@ VSS_ID* snapshotId = nullptr;
 #define SHORT_SLEEP 500
 #define LONG_SLEEP 1500
 
+/// <summary>
+/// Entry point
+/// </summary>
+/// <param name="argc"></param>
+/// <param name="argv"></param>
+/// <returns></returns>
 int main(int argc, char** argv)
 {
     HRESULT result = E_FAIL;
     HRESULT asyncResult = E_FAIL;
     VSS_SNAPSHOT_PROP snapshotProp{};
+    BOOL quiet = FALSE;
+    DWORD fileAttributes = INVALID_FILE_ATTRIBUTES;
+    DWORD error = -1;
+    LPWSTR errorBuffer{};
+
+    // loop over command line options -- _very_ simple parsing
+    if (argc < 2) {
+        usage();
+        exit(0);
+    }
+    for (int i = 0; i < argc; i++) {
+        if (argv[i] == "/?") {
+            usage();
+            exit(0);
+        }
+        // handle switches
+        if (argv[i][0] == (char)"-") {
+            if (argv[i] == "-q") {
+                quiet = true;
+            }
+            if (argv[i] == "-h" || argv[i] == "--help" || argv[i] == "-?" || argv[i] == "--usage") {
+                usage();
+                exit(0);
+            }
+        }
+        // check INI file
+        else {
+            fileAttributes = GetFileAttributesA(argv[i]);
+
+            if (fileAttributes == INVALID_FILE_ATTRIBUTES) {
+                error = GetLastError();
+
+                errorBuffer = (LPWSTR)malloc(MAX_PATH);
+
+                FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                    NULL,
+                    error,
+                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                    errorBuffer,
+                    MAX_PATH,
+                    NULL);
+
+                wprintf(L"Failed to check INI file: 0x%x %s", error, errorBuffer);
+                free(errorBuffer);
+                errorBuffer = nullptr;
+
+                exit(error);
+            }
+            
+        }
+    }
 
     // initialize COM (must do before InitializeForBackup works)
     result = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
@@ -165,6 +227,8 @@ int main(int argc, char** argv)
     // copy target file to test destination
     CopyFile(sourcePathWithDeviceObject, destPath, TRUE);
 
+
+
     VssFreeSnapshotProperties(&snapshotProp);
 
 
@@ -218,4 +282,23 @@ void bail(HRESULT exitCode) {
 void banner(void) {
     printf("ShadowDuplicator -- Copyright (C) 2021 Peter Upfold\n");
     printf("\n");
+}
+
+/// <summary>
+/// Print a usage statement
+/// </summary>
+/// <param name=""></param>
+void usage(void) {
+    printf("Usage: ShadowDuplicator.exe [OPTIONS] INI-FILE\n");
+    printf("Example: ShadowDuplicator.exe -q BackupConfig.ini\n");
+    printf("\n");
+    printf("\n");
+    printf("\n");
+    printf("Options:\n");
+    printf("-h, --help, -?, /?, --usage     Print this help message\n");
+    printf("-q                              Silence the banner and any progress messages\n");
+    printf("\n");
+    printf("The path to the INI file must not begin with '-'.\n");
+    printf("The INI file should be as follows:\n");
+    printf("TODO\n");
 }
