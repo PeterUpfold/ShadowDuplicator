@@ -82,6 +82,11 @@ LPSTR canonicalINIPath = nullptr;
 /// </summary>
 int progressMarker = 0;
 
+/// <summary>
+/// Whether to display progres and verbose status.
+/// </summary>
+BOOL quiet = FALSE;
+
 #define SHORT_SLEEP 500
 #define LONG_SLEEP 1500
 
@@ -96,7 +101,7 @@ int main(int argc, char** argv)
     HRESULT result = E_FAIL;
     HRESULT asyncResult = E_FAIL;
     VSS_SNAPSHOT_PROP snapshotProp{};
-    BOOL quiet = FALSE;
+    
     DWORD fileAttributes = INVALID_FILE_ATTRIBUTES;
     DWORD error = 0;
     LPWSTR errorBuffer = nullptr;
@@ -447,7 +452,7 @@ int main(int argc, char** argv)
 
     // calculate file paths
     WCHAR sourcePathWithDeviceObject[MAX_PATH] = L"";
-    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH, L"%s\\%s\\", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryWithoutDrive);
+    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH, L"%s\\%s\\*", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryWithoutDrive);
 
     // find files in directory
     HANDLE findHandle = INVALID_HANDLE_VALUE;
@@ -458,25 +463,57 @@ int main(int argc, char** argv)
         bail(2);
     }
 
+    WCHAR sourcePathFile[MAX_PATH]{};
+    WCHAR destinationPathFile[MAX_PATH]{};
+
     do {
-        wprintf(findData.cFileName);
-        wprintf(L"\n");
+        if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) {
+            continue;
+        }
+
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            // does not currently back up sub directories
+            continue;
+        }
+
+        // build source and destination path for files
+        StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH, L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryWithoutDrive, findData.cFileName);
+        StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH, L"%s\\%s", destDirectoryWide, findData.cFileName);
+
+        if (!quiet) {
+            wprintf(L"%s -> %s\n", sourcePathFile, destinationPathFile);
+        }        
+        
+        BOOL copyResult = CopyFileEx(sourcePathFile, destinationPathFile, (LPPROGRESS_ROUTINE)&copyProgress, NULL, FALSE, 0);
+
+        if (!copyResult) {
+            error = GetLastError();
+            if (error) {
+                errorBuffer = (LPWSTR)malloc(MAX_PATH * 2) /* wide string */;
+                assert(errorBuffer != nullptr);
+
+                FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                    NULL,
+                    error,
+                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                    errorBuffer,
+                    MAX_PATH,
+                    NULL);
+
+                wprintf(L"Failed to copy to %s: 0x%x %s", destinationPathFile, error, errorBuffer);
+                free(errorBuffer);
+                errorBuffer = nullptr;
+                bail(error);
+            }
+        }
+
     } while (FindNextFile(findHandle, &findData) != 0);
     
-    WCHAR destPath[MAX_PATH] = L"C:\\Users\\Public\\Documents\\target_copied.txt";
-
-    
-
-    wprintf(sourcePathWithDeviceObject);
-    printf("\n");
-        
-    // copy target file to test destination
-    CopyFile(sourcePathWithDeviceObject, destPath, TRUE);
-
-
-
     VssFreeSnapshotProperties(&snapshotProp);
 
+    if (!quiet) {
+        printf("Completed all copy operations successfully.\n");
+    }
 
     bail(0);
 }
@@ -575,8 +612,9 @@ void usage(void) {
     printf("-q                              Silence the banner and any progress messages\n");
     printf("\n");
     printf("The path to the INI file must not begin with '-'.\n");
-    printf("The INI file should be as follows:\n");
-    printf("TODO\n");
+    printf("The INI file should be as follows:\n\n");
+    printf("[FileSet]\nSource = C:\\Users\\Public\\Documents\nDestination = D:\\test\n");
+    printf("Do not include trailing slashes in paths.\n");
 }
 
 /// <summary>
@@ -603,4 +641,34 @@ void spinProgress(void) {
     if (progressMarker > 3) {
         progressMarker = 0;
     }
+}
+
+/// <summary>
+/// Callback for the file copy progress.
+/// </summary>
+/// <param name="TotalFileSize"></param>
+/// <param name="TotalBytesTransferred"></param>
+/// <param name="StreamSize"></param>
+/// <param name="StreamBytesTransferred"></param>
+/// <param name="dwStreamNumber"></param>
+/// <param name="dwCallbackReason"></param>
+/// <param name="hSourceFile"></param>
+/// <param name="hDestinationFile"></param>
+/// <param name="lpData"></param>
+/// <returns></returns>
+LPPROGRESS_ROUTINE copyProgress(
+    LARGE_INTEGER TotalFileSize,
+    LARGE_INTEGER TotalBytesTransferred,
+    LARGE_INTEGER StreamSize,
+    LARGE_INTEGER StreamBytesTransferred,
+    DWORD dwStreamNumber,
+    DWORD dwCallbackReason,
+    HANDLE hSourceFile,
+    HANDLE hDestinationFile,
+    LPVOID lpData
+) {
+    if (!quiet) {
+        spinProgress();
+    }
+    return PROGRESS_CONTINUE;
 }

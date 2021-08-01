@@ -12,3 +12,9 @@ This code is **not** production quality. I am learning how to work with Win32 AP
 with memory management etc. There is certainly plenty of potential for improvement of this code,
 but beyond that, it may even be insecure, destructive or cause you other serious problems. There 
 is no warranty.
+
+## Limitations
+
+Not currently recursively copying.
+
+File handling is limited by `MAX_PATH`.
