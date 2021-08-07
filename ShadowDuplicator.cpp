@@ -17,11 +17,10 @@ is no warranty.
 #include <vss.h>
 #include <vswriter.h>
 #include <vsbackup.h>
-#include <cassert>
 #include <strsafe.h>
 #include "ShadowDuplicator.h"
 
-#define assert(expression) if (!(expression)) { printf("assert on %d", __LINE__); exit(1); }
+#define assert(expression) if (!(expression)) { printf("assert on %d", __LINE__); bail(250); }
 
 /// <summary>
 /// The backup components VSS object.
@@ -80,6 +79,12 @@ LPSTR sourceDrive = nullptr;
 LPSTR canonicalINIPath = nullptr;
 
 /// <summary>
+/// Is COM initialized? For only calling CoUninitialize() in bail() if we 
+/// have initialized it.
+/// </summary>
+BOOL comInitialized = FALSE;
+
+/// <summary>
 /// Keep global state for a visible spinner to show progress.
 /// </summary>
 int progressMarker = 0;
@@ -109,8 +114,6 @@ int main(int argc, char** argv)
     LPWSTR errorBuffer = nullptr;
 
     WIN32_FIND_DATA findData{};
-
-    //TODO asserts aren't in release builds
 
     // loop over command line options -- _very_ simple parsing
     if (argc < 2) {
@@ -291,6 +294,7 @@ int main(int argc, char** argv)
         printf("Unable to initialize COM -- 0x%x\n", result);
         exit(result);
     }
+    comInitialized = TRUE;
 
     result = CreateVssBackupComponents(&backupComponents);
     if (result == E_ACCESSDENIED) {
@@ -323,7 +327,6 @@ int main(int argc, char** argv)
         OutputDebugString(L"Waiting for async VSS status...");
     }
 
-    //printf("Got async result final: %x\n", asyncResult);
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
         printf("Operation was cancelled.");
         bail(result);
@@ -336,7 +339,6 @@ int main(int argc, char** argv)
     genericFailCheck("SetBackupState", result);
 
     // start a new snapshot set
-
     snapshotSetId = (VSS_ID*)malloc(sizeof(VSS_ID));
     assert(snapshotSetId != 0);
 
@@ -584,9 +586,14 @@ void bail(HRESULT exitCode) {
         vssAsync = nullptr;
     }
 
-    backupComponents->Release();
-    backupComponents = nullptr;
-    CoUninitialize();
+    if (backupComponents != nullptr) {
+        backupComponents->Release();
+        backupComponents = nullptr;
+    }
+    
+    if (comInitialized) {
+        CoUninitialize();
+    }
     exit(exitCode);
 }
 
