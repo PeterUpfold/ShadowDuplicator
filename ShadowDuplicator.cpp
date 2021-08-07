@@ -21,6 +21,8 @@ is no warranty.
 #include <strsafe.h>
 #include "ShadowDuplicator.h"
 
+#define assert(expression) if (!(expression)) { printf("assert on %d", __LINE__); exit(1); }
+
 /// <summary>
 /// The backup components VSS object.
 /// </summary>
@@ -667,6 +669,7 @@ LPPROGRESS_ROUTINE copyProgress(
     HANDLE hDestinationFile,
     LPVOID lpData
 ) {
+    //TODO: determinate progress
     if (!quiet) {
         spinProgress();
     }
