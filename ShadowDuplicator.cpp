@@ -602,6 +602,16 @@ void bail(HRESULT exitCode) {
 /// </summary>
 /// <param name=""></param>
 void banner(void) {
+    const char banner[] = " #####                                     ######                                                            \n"
+"#     # #    #   ##   #####   ####  #    # #     # #    # #####  #      #  ####    ##   #####  ####  #####   \n"
+"#       #    #  #  #  #    # #    # #    # #     # #    # #    # #      # #    #  #  #    #   #    # #    #  \n"
+" #####  ###### #    # #    # #    # #    # #     # #    # #    # #      # #      #    #   #   #    # #    #  \n"
+"      # #    # ###### #    # #    # # ## # #     # #    # #####  #      # #      ######   #   #    # #####   \n"
+"#     # #    # #    # #    # #    # ##  ## #     # #    # #      #      # #    # #    #   #   #    # #   #   \n"
+" #####  #    # #    # #####   ####  #    # ######   ####  #      ###### #  ####  #    #   #    ####  #    #  \n";
+    
+    
+    printf("%s\n", banner);
     printf("ShadowDuplicator -- Copyright (C) 2021 Peter Upfold\n");
     printf("\n");
 }
@@ -653,6 +663,18 @@ void spinProgress(void) {
 }
 
 /// <summary>
+/// Spin a determinate progress indicator for file copies.
+/// </summary>
+/// <param name="total">Total number of bytes</param>
+/// <param name="transferred">Number of bytes transferred</param>
+void determinateProgress(LARGE_INTEGER total, LARGE_INTEGER transferred) {
+    LONGLONG totalLong = total.QuadPart;
+    LONGLONG transferredLong = transferred.QuadPart;
+
+    printf("%lld/%lld bytes copied... \r", transferredLong, totalLong);
+}
+
+/// <summary>
 /// Callback for the file copy progress.
 /// </summary>
 /// <param name="TotalFileSize"></param>
@@ -676,9 +698,8 @@ LPPROGRESS_ROUTINE copyProgress(
     HANDLE hDestinationFile,
     LPVOID lpData
 ) {
-    //TODO: determinate progress
     if (!quiet) {
-        spinProgress();
+        determinateProgress(TotalFileSize, TotalBytesTransferred);
     }
     return PROGRESS_CONTINUE;
 }
