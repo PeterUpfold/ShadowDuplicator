@@ -299,6 +299,7 @@ int main(int argc, char** argv)
     result = CreateVssBackupComponents(&backupComponents);
     if (result == E_ACCESSDENIED) {
         printf("Failed to create the VSS backup components as access was denied. Is this being run with elevated permissions?\n");
+        CoUninitialize();
         exit(E_ACCESSDENIED);
     }
     genericFailCheck("CreateVssBackupComponents", result);
@@ -669,9 +670,11 @@ void spinProgress(void) {
 /// <param name="transferred">Number of bytes transferred</param>
 void determinateProgress(LARGE_INTEGER total, LARGE_INTEGER transferred) {
     LONGLONG totalLong = total.QuadPart;
+    totalLong /= 1024 * 1024;
     LONGLONG transferredLong = transferred.QuadPart;
+    transferredLong /= 1024 * 1024;
 
-    printf("%lld/%lld bytes copied... \r", transferredLong, totalLong);
+    printf("%lld/%lld MiB copied... \r", transferredLong, totalLong);
 }
 
 /// <summary>
