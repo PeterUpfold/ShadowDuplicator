@@ -111,7 +111,7 @@ int main(int argc, char** argv)
     
     DWORD fileAttributes = INVALID_FILE_ATTRIBUTES;
     DWORD error = 0;
-    LPWSTR errorBuffer = nullptr;
+    
 
     WIN32_FIND_DATA findData{};
 
@@ -141,22 +141,7 @@ int main(int argc, char** argv)
 
             if (fileAttributes == INVALID_FILE_ATTRIBUTES) {
                 error = GetLastError();
-
-                errorBuffer = (LPWSTR)malloc(MAX_PATH * 2); /* wide */
-                assert(errorBuffer != nullptr);
-
-                FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                    NULL,
-                    error,
-                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                    errorBuffer,
-                    MAX_PATH,
-                    NULL);
-
-                wprintf(L"Failed to check INI file: 0x%x %s", error, errorBuffer);
-                free(errorBuffer);
-                errorBuffer = nullptr;
-
+                friendlyError(L"Failed to check INI file", error);
                 exit(error);
             }
 
@@ -165,22 +150,7 @@ int main(int argc, char** argv)
             // canonicalise path
             if (!(GetFullPathNameA(argv[i], MAX_PATH, canonicalINIPath, NULL))) {
                 error = GetLastError();
-
-                errorBuffer = (LPWSTR)malloc(MAX_PATH * 2); /* wide */
-                assert(errorBuffer != nullptr);
-
-                FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                    NULL,
-                    error,
-                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                    errorBuffer,
-                    MAX_PATH,
-                    NULL);
-
-                wprintf(L"Failed to get full path name of specified INI file: 0x%x %s", error, errorBuffer);
-                free(errorBuffer);
-                errorBuffer = nullptr;
-
+                friendlyError(L"Failed to get full path name of specified INI file", error);
                 exit(error);
             }
 
@@ -203,21 +173,7 @@ int main(int argc, char** argv)
 
             error = GetLastError();
             if (error) {
-                errorBuffer = (LPWSTR)malloc(MAX_PATH*2) /* wide string */;
-                assert(errorBuffer != nullptr);
-
-                FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                    NULL,
-                    error,
-                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                    errorBuffer,
-                    MAX_PATH,
-                    NULL);
-
-                wprintf(L"Failed to import Source from INI file: 0x%x %s", error, errorBuffer);
-                free(errorBuffer);
-                errorBuffer = nullptr;
-
+                friendlyError(L"Failed to import Source from INI file", error);
                 exit(error);
             }
 
@@ -233,22 +189,7 @@ int main(int argc, char** argv)
 
             error = GetLastError();
             if (error) {
-                errorBuffer = (LPWSTR)malloc(MAX_PATH * 2) /* wide string */;
-                assert(errorBuffer != nullptr);
-
-                FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                    NULL,
-                    error,
-                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                    errorBuffer,
-                    MAX_PATH,
-                    NULL);
-
-                wprintf(L"Failed to import Destination from INI file: 0x%x %s", error, errorBuffer);
-                free(errorBuffer);
-                errorBuffer = nullptr;
-
-                exit(error);
+                friendlyError(L"Failed to import Destination from INI file", error);
             }
 
 
@@ -259,22 +200,7 @@ int main(int argc, char** argv)
             if (!GetVolumePathNameA(sourceDirectory, sourceDrive, MAX_PATH)) {
                 error = GetLastError();
                 if (error) {
-                    errorBuffer = (LPWSTR)malloc(MAX_PATH * 2) /* wide string */;
-                    assert(errorBuffer != nullptr);
-
-                    FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                        NULL,
-                        error,
-                        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                        errorBuffer,
-                        MAX_PATH,
-                        NULL);
-
-                    wprintf(L"Failed to get Source Drive from Source Directory: 0x%x %s", error, errorBuffer);
-                    free(errorBuffer);
-                    errorBuffer = nullptr;
-
-                    exit(error);
+                    friendlyError(L"Failed to get Source Drive from Source Directory", error);
                 }
             }
 
@@ -515,20 +441,7 @@ int main(int argc, char** argv)
         if (!copyResult) {
             error = GetLastError();
             if (error) {
-                errorBuffer = (LPWSTR)malloc(MAX_PATH * 2) /* wide string */;
-                assert(errorBuffer != nullptr);
-
-                FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                    NULL,
-                    error,
-                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                    errorBuffer,
-                    MAX_PATH,
-                    NULL);
-
-                wprintf(L"Failed to copy to %s: 0x%x %s", destinationPathFile, error, errorBuffer);
-                free(errorBuffer);
-                errorBuffer = nullptr;
+                friendlyCopyError(L"Failed to copy to ", destinationPathFile, error); // friendlyCopyError does not bail for us
                 bail(error);
             }
         }
@@ -546,6 +459,58 @@ int main(int argc, char** argv)
     }
 
     bail(0);
+}
+
+/// <summary>
+/// Display a formatted error string, looking up the Win32 error code and displaying
+/// its explanation.
+/// </summary>
+/// <param name="ourErrorDescription">The ShadowDuplicator error description</param>
+/// <param name="error">The error code as returned from GetLastError()</param>
+void friendlyError(LPCWSTR ourErrorDescription, const DWORD error)
+{
+    LPTSTR errorBuffer = nullptr;
+
+    FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_ALLOCATE_BUFFER,
+        NULL,
+        error,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPTSTR)&errorBuffer,
+        MAX_PATH,
+        NULL);
+
+    assert(errorBuffer != nullptr);
+
+    wprintf(L"%s: 0x%x %s", ourErrorDescription, error, errorBuffer);
+    LocalFree(errorBuffer);
+    errorBuffer = nullptr;
+
+    bail(error);
+}
+
+/// <summary>
+/// Display a formatted error string for a copy failure, looking up the Win32 error code and displaying
+/// its explanation. DOES NOT EXIT itself
+/// </summary>
+/// <param name="ourErrorDescription">The ShadowDuplicator error description</param>
+/// <param name="error">The error code as returned from GetLastError()</param>
+void friendlyCopyError(LPCWSTR ourErrorDescription, LPWSTR destinationFile, const DWORD error)
+{
+    LPTSTR errorBuffer = nullptr;
+
+    FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_ALLOCATE_BUFFER,
+        NULL,
+        error,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPTSTR)&errorBuffer,
+        MAX_PATH,
+        NULL);
+
+    assert(errorBuffer != nullptr);
+
+    wprintf(L"%s \"%s\": 0x%x %s", ourErrorDescription, destinationFile, error, errorBuffer);
+    LocalFree(errorBuffer);
+    errorBuffer = nullptr;
 }
 
 /// <summary>
@@ -613,6 +578,9 @@ void bail(HRESULT exitCode) {
     }
 
     if (backupComponents != nullptr) {
+        // free writer metadata
+        backupComponents->FreeWriterMetadata();
+
         backupComponents->Release();
         backupComponents = nullptr;
     }

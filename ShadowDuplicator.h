@@ -18,6 +18,8 @@ is no warranty.
 #include <cassert>
 
 void genericFailCheck(const char* operationName, HRESULT result);
+void friendlyError(LPCWSTR ourErrorDescription, const DWORD error);
+void friendlyCopyError(LPCWSTR ourErrorDescription, LPWSTR destinationFile, const DWORD error);
 void bail(HRESULT exitCode);
 void banner(void);
 void usage(void);
