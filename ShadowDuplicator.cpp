@@ -323,6 +323,8 @@ int main(int argc, char** argv)
         result = vssAsync->QueryStatus(&asyncResult, NULL);
         if (result != S_OK) {
             printf("Unable to query vss async status -- %x\n", result);
+            vssAsync->Release();
+            vssAsync = nullptr;
             bail(result);
         }
         OutputDebugString(L"Waiting for async VSS status...");
@@ -330,8 +332,13 @@ int main(int argc, char** argv)
 
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
         printf("Operation was cancelled.");
+        vssAsync->Release();
+        vssAsync = nullptr;
         bail(result);
     }
+
+    vssAsync->Release();
+    vssAsync = nullptr;
 
     asyncResult = E_FAIL;
 
@@ -365,12 +372,15 @@ int main(int argc, char** argv)
     // notify writers of impending backup
     result = backupComponents->PrepareForBackup(&vssAsync);
     genericFailCheck("PrepareForBackup", result);
+    assert(vssAsync != nullptr);
 
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
         Sleep(SHORT_SLEEP);
         result = vssAsync->QueryStatus(&asyncResult, NULL);
         if (result != S_OK) {
             printf("Unable to query vss async status -- %x\n", result);
+            vssAsync->Release();
+            vssAsync = nullptr;
             bail(result);
         }
         if (!quiet) {
@@ -381,13 +391,18 @@ int main(int argc, char** argv)
 
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
         printf("Operation was cancelled.");
+        vssAsync->Release();
+        vssAsync = nullptr;
         bail(asyncResult);
     }
 
     asyncResult = E_FAIL;
+    vssAsync->Release();
+    vssAsync = nullptr;
 
-    //TODO we should verify writer status
-
+    // verify writer status
+    result = backupComponents->GatherWriterStatus(&vssAsync);
+    // TODO finish this
 
     // request shadow copy
 
@@ -403,6 +418,8 @@ int main(int argc, char** argv)
         result = vssAsync->QueryStatus(&asyncResult, NULL);
         if (result != S_OK) {
             printf("Unable to query vss async status -- %x\n", result);
+            vssAsync->Release();
+            vssAsync = nullptr;
             bail(result);
         }
         
@@ -414,10 +431,14 @@ int main(int argc, char** argv)
 
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
         printf("Operation was cancelled.");
+        vssAsync->Release();
+        vssAsync = nullptr;
         bail(asyncResult);
     }
 
     asyncResult = E_FAIL;
+    vssAsync->Release();
+    vssAsync = nullptr;
 
     //TODO we should verify writer status 
 
@@ -514,6 +535,10 @@ int main(int argc, char** argv)
 
     } while (FindNextFile(findHandle, &findData) != 0);
     
+    // free writer metadata
+    result = backupComponents->FreeWriterMetadata();
+    genericFailCheck("FreeWriterMetadata", result);
+
     VssFreeSnapshotProperties(&snapshotProp);
 
     if (!quiet) {
