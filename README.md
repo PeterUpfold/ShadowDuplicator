@@ -38,6 +38,8 @@ An example INI configuration file:
     Source=C:\Users\Public\Documents
     Destination=H:\test
 
+Please install the [latest supported Visual C++ redistributable (x64)](https://docs.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#visual-studio-2015-2017-2019-and-2022) before trying to launch.
+
 ## Disclaimer
 
 This code is **not** production quality. I am learning how to work with Win32 APIs and work

@@ -18,6 +18,7 @@ is no warranty.
 #include <vswriter.h>
 #include <vsbackup.h>
 #include <strsafe.h>
+#include <shlwapi.h>
 #include "ShadowDuplicator.h"
 
 #define assert(expression) if (!(expression)) { printf("assert on %d", __LINE__); bail(250); }
@@ -211,6 +212,14 @@ int main(int argc, char** argv)
 
     if (!quiet) {
         banner();
+    }
+
+    // check the dest directory existence before we bother to set up VSS
+    if (!PathFileExistsA(destDirectory)) {
+        error = GetLastError();
+        if (error) {
+            friendlyError(L"The destination directory does not seem to exist.", error); //friendlyError will bail
+        }
     }
 
     // initialize COM (must do before InitializeForBackup works)
