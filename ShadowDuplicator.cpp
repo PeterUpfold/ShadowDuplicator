@@ -123,7 +123,7 @@ int main(int argc, char** argv)
 
     WIN32_FIND_DATA findData{};
 
-    int lastSwitchArgument = 0; // the index of the last command line arg that was a switch
+    int lastSwitchArgument = 1; // the index of the last command line arg that was a switch
     BOOL switchArgumentsComplete = FALSE;
 
     // loop over command line options -- _very_ simple parsing
@@ -149,8 +149,8 @@ int main(int argc, char** argv)
             }
             if (strcmp(argv[i], "--singlefile") == 0 || strcmp(argv[i], "-s") == 0) {
                 singleFileMode = TRUE;
-                printf("Single file mode\n");
             }
+            ++lastSwitchArgument;
         }
         
         else {
@@ -175,6 +175,17 @@ int main(int argc, char** argv)
                 // usage: ShadowDuplicator -s [source] [dest]
                 if (i == lastSwitchArgument + 1) {
                     StringCbPrintfA(sourceDirectoryOrFile, MAX_PATH, "%s", argv[i]);
+
+                    // get source drive from source directory
+                    sourceDrive = (LPSTR)malloc(MAX_PATH);
+                    assert(sourceDrive != nullptr);
+
+                    if (!GetVolumePathNameA(sourceDirectoryOrFile, sourceDrive, MAX_PATH)) {
+                        error = GetLastError();
+                        if (error) {
+                            friendlyError(L"Failed to get Source Drive from Source Directory", error);
+                        }
+                    }
                 }
                 if (i == lastSwitchArgument + 2) {
                     StringCbPrintfA(destDirectory, MAX_PATH, "%s", argv[i]);
@@ -265,7 +276,7 @@ int main(int argc, char** argv)
         printf("No destination directory was specified.\n"); // friendlyError is not appropriate as this looks up Win32 error codes
         bail(SDEXIT_NO_DEST_DIR_SPECIFIED);
     }
-    if (!PathFileExistsA(destDirectory)) {
+    if (!singleFileMode && !PathFileExistsA(destDirectory)) { //TODO: can we add to this checking dest dir in single file mode?
         error = GetLastError();
         if (error) {
             friendlyError(L"The destination directory does not seem to exist.", error); //friendlyError will bail
@@ -476,7 +487,14 @@ int main(int argc, char** argv)
 
     if (singleFileMode)
     {
+        // build source and dest path
+        StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH, L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive);
+        StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH, L"%s", destDirectoryWide);
 
+        copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
+        if (copyError) {
+            bail(copyError);
+        }
     }
     else
     {
@@ -498,6 +516,9 @@ int main(int argc, char** argv)
 
             if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                 // does not currently back up sub directories
+                if (!quiet) {
+                    printf("WARNING: ShadowDuplicator does not presently back up subdirectories.\n");
+                }
                 continue;
             }
 
@@ -532,7 +553,7 @@ int main(int argc, char** argv)
 /// <param name="sourcePathFile">The source path, with the VSS snapshot device object already substituted in</param>
 /// <param name="destinationPathFile">The destination path</param>
 /// <returns>0 on success, or the DWORD from GetLastError() upon failure</returns>
-DWORD ShadowCopyFile(WCHAR  sourcePathFile[260], WCHAR  destinationPathFile[260])
+DWORD ShadowCopyFile(WCHAR  sourcePathFile[MAX_PATH], WCHAR  destinationPathFile[MAX_PATH])
 {
     DWORD error = 0;
 
@@ -798,10 +819,10 @@ void banner(void) {
 void usage(void) {
     printf("Usage: ShadowDuplicator.exe [OPTIONS] INI-FILE\n");
     printf(" or single file mode:\n");
-    printf("Usage: ShadowDuplicator.exe -s [SOURCE] [DEST_DIRECTORY]\n");
+    printf("Usage: ShadowDuplicator.exe -s [SOURCE] [DEST_DIRECTORY_AND_FILENAME]\n");
     printf("\n");
     printf("Multi File Example:  ShadowDuplicator.exe -q BackupConfig.ini\n");
-    printf("Single File Example: ShadowDuplicator.exe -q -s SourceFile.txt D:\\DestDirectory\n");
+    printf("Single File Example: ShadowDuplicator.exe -q -s SourceFile.txt D:\\DestDirectory\\DestFile.txt\n");
     printf("\n");
     printf("\n");
     printf("\n");
@@ -815,8 +836,8 @@ void usage(void) {
     printf("[FileSet]\nSource = C:\\Users\\Public\\Documents\nDestination = D:\\test\n");
     printf("Do not include trailing slashes in paths.\n");
     printf("\n");
-    printf("In single-file mode, the destination file will always have the same basename + extension\n");
-    printf("as the original source file. Only provide the destination DIRECTORY as the second argument.\n");
+    printf("In single-file mode, you must provide the full destination path, including destination file name in the\n");
+    printf("directory.\n");
     printf("\n");
     printf("WARNING: Copies will always overwrite items in the destination.\n");
 }

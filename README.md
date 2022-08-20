@@ -17,10 +17,10 @@ Apache 2.0. Please see `LICENSE`.
 
     Usage: ShadowDuplicator.exe [OPTIONS] INI-FILE
     or single file mode:
-    Usage: ShadowDuplicator.exe -s [SOURCE] [DEST_DIRECTORY]
+    Usage: ShadowDuplicator.exe -s [SOURCE] [DEST_DIRECTORY_AND_FILENAME]
 
     Multi File Example:  ShadowDuplicator.exe -q BackupConfig.ini
-    Single File Example: ShadowDuplicator.exe -q -s SourceFile.txt D:\DestDirectory
+    Single File Example: ShadowDuplicator.exe -q -s SourceFile.txt D:\DestDirectory\DestFile.txt
 
 
 
@@ -37,8 +37,8 @@ Apache 2.0. Please see `LICENSE`.
     Destination = D:\test
     Do not include trailing slashes in paths.
 
-    In single-file mode, the destination file will always have the same basename + extension
-    as the original source file. Only provide the destination DIRECTORY as the second argument.
+    In single-file mode, you must provide the full destination path, including destination file name in the
+    directory.
 
     WARNING: Copies will always overwrite items in the destination.
 
