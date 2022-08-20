@@ -46,7 +46,7 @@ VSS_ID* snapshotId = nullptr;
 /// <summary>
 /// The source directory to back up.
 /// </summary>
-LPSTR sourceDirectory = nullptr;
+LPSTR sourceDirectoryOrFile = nullptr;
 
 /// <summary>
 /// The destination directory where backed up files should be copied.
@@ -112,9 +112,13 @@ int main(int argc, char** argv)
     
     DWORD fileAttributes = INVALID_FILE_ATTRIBUTES;
     DWORD error = 0;
-    
+    DWORD copyError = 0;
+    BOOL singleFileMode = FALSE;
 
     WIN32_FIND_DATA findData{};
+
+    int lastSwitchArgument = 0; // the index of the last command line arg that was a switch
+    BOOL switchArgumentsComplete = FALSE;
 
     // loop over command line options -- _very_ simple parsing
     if (argc < 2) {
@@ -135,80 +139,109 @@ int main(int argc, char** argv)
                 usage();
                 exit(0);
             }
+            if (argv[i] == "--singlefile" || argv[i] == "-s") {
+                singleFileMode = TRUE;
+            }
         }
-        // check INI file
+        
         else {
-            fileAttributes = GetFileAttributesA(argv[i]);
-
-            if (fileAttributes == INVALID_FILE_ATTRIBUTES) {
-                error = GetLastError();
-                friendlyError(L"Failed to check INI file", error);
-                exit(error);
+            if (!switchArgumentsComplete) {
+                lastSwitchArgument = lastSwitchArgument - 1;
+                switchArgumentsComplete = TRUE;
             }
 
-            canonicalINIPath = (LPSTR)malloc(MAX_PATH);
+            if (singleFileMode) { // get source and dest path
+                
+                // allocate space for source and destination paths
+                if (sourceDirectoryOrFile == nullptr) {
+                    sourceDirectoryOrFile = (LPSTR)malloc(MAX_PATH);
+                }
+                if (destDirectory == nullptr) {
+                    destDirectory = (LPSTR)malloc(MAX_PATH);
+                }
+                
+                assert(sourceDirectoryOrFile != nullptr);
+                assert(destDirectory != nullptr);
 
-            // canonicalise path
-            if (!(GetFullPathNameA(argv[i], MAX_PATH, canonicalINIPath, NULL))) {
-                error = GetLastError();
-                friendlyError(L"Failed to get full path name of specified INI file", error);
-                exit(error);
-            }
-
-            // allocate space for source and destination paths
-            sourceDirectory = (LPSTR)malloc(MAX_PATH);
-            destDirectory = (LPSTR)malloc(MAX_PATH);
-
-            assert(sourceDirectory != nullptr);
-            assert(destDirectory != nullptr);
-            
-            // get source from INI
-            GetPrivateProfileStringA(
-                "FileSet",
-                "Source",
-                "",
-                sourceDirectory,
-                MAX_PATH,
-                canonicalINIPath
-            );
-
-            error = GetLastError();
-            if (error) {
-                friendlyError(L"Failed to import Source from INI file", error);
-                exit(error);
-            }
-
-            // get dest from INI
-            GetPrivateProfileStringA(
-                "FileSet",
-                "Destination",
-                "",
-                destDirectory,
-                MAX_PATH,
-                canonicalINIPath
-            );
-
-            error = GetLastError();
-            if (error) {
-                friendlyError(L"Failed to import Destination from INI file", error);
-            }
-
-
-            // get source drive from source directory
-            sourceDrive = (LPSTR)malloc(MAX_PATH);
-            assert(sourceDrive != nullptr);
-
-            if (!GetVolumePathNameA(sourceDirectory, sourceDrive, MAX_PATH)) {
-                error = GetLastError();
-                if (error) {
-                    friendlyError(L"Failed to get Source Drive from Source Directory", error);
+                // usage: ShadowDuplicator -s [source] [dest]
+                if (i == lastSwitchArgument + 1) {
+                    StringCbPrintfA(sourceDirectoryOrFile, MAX_PATH, "%s", argv[i]);
+                }
+                if (i == lastSwitchArgument + 2) {
+                    StringCbPrintfA(destDirectory, MAX_PATH, "%s", argv[i]);
                 }
             }
+            else { // multi-file mode -- check INI file
+                fileAttributes = GetFileAttributesA(argv[i]);
 
+                if (fileAttributes == INVALID_FILE_ATTRIBUTES) {
+                    error = GetLastError();
+                    friendlyError(L"Failed to check INI file", error);
+                    exit(error);
+                }
+
+                canonicalINIPath = (LPSTR)malloc(MAX_PATH);
+
+                // canonicalise path
+                if (!(GetFullPathNameA(argv[i], MAX_PATH, canonicalINIPath, NULL))) {
+                    error = GetLastError();
+                    friendlyError(L"Failed to get full path name of specified INI file", error);
+                    exit(error);
+                }
+
+                // allocate space for source and destination paths
+                sourceDirectoryOrFile = (LPSTR)malloc(MAX_PATH);
+                destDirectory = (LPSTR)malloc(MAX_PATH);
+
+                assert(sourceDirectoryOrFile != nullptr);
+                assert(destDirectory != nullptr);
+            
+                // get source from INI
+                GetPrivateProfileStringA(
+                    "FileSet",
+                    "Source",
+                    "",
+                    sourceDirectoryOrFile,
+                    MAX_PATH,
+                    canonicalINIPath
+                );
+
+                error = GetLastError();
+                if (error) {
+                    friendlyError(L"Failed to import Source from INI file", error);
+                    exit(error);
+                }
+
+                // get dest from INI
+                GetPrivateProfileStringA(
+                    "FileSet",
+                    "Destination",
+                    "",
+                    destDirectory,
+                    MAX_PATH,
+                    canonicalINIPath
+                );
+
+                error = GetLastError();
+                if (error) {
+                    friendlyError(L"Failed to import Destination from INI file", error);
+                }
+
+
+                // get source drive from source directory
+                sourceDrive = (LPSTR)malloc(MAX_PATH);
+                assert(sourceDrive != nullptr);
+
+                if (!GetVolumePathNameA(sourceDirectoryOrFile, sourceDrive, MAX_PATH)) {
+                    error = GetLastError();
+                    if (error) {
+                        friendlyError(L"Failed to get Source Drive from Source Directory", error);
+                    }
+                }
+            }
         }
     }
-
-    
+   
 
     if (!quiet) {
         banner();
@@ -384,9 +417,9 @@ int main(int argc, char** argv)
     OutputDebugString(snapshotProp.m_pwszSnapshotDeviceObject);
 
     // make wide versions of source and dest
-    int sourceDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectory, -1, sourceDirectoryWide, 0);
+    int sourceDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectoryOrFile, -1, sourceDirectoryWide, 0);
     sourceDirectoryWide = (LPWSTR)malloc(sourceDirectoryWideBufferSize * 2);
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectory, -1, sourceDirectoryWide, sourceDirectoryWideBufferSize);
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectoryOrFile, -1, sourceDirectoryWide, sourceDirectoryWideBufferSize);
     int destDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destDirectory, -1, destDirectoryWide, 0);
     destDirectoryWide = (LPWSTR)malloc(destDirectoryWideBufferSize * 2);
     MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destDirectory, -1, destDirectoryWide, destDirectoryWideBufferSize);
@@ -441,7 +474,10 @@ int main(int argc, char** argv)
         StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH, L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryWithoutDrive, findData.cFileName);
         StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH, L"%s\\%s", destDirectoryWide, findData.cFileName);
 
-        ShadowCopyFile(sourcePathFile, destinationPathFile);
+        copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
+        if (copyError) {
+            bail(copyError);
+        }
 
     } while (FindNextFile(findHandle, &findData) != 0);
     
@@ -554,9 +590,9 @@ void genericFailCheck(const char* operationName, HRESULT result) {
 /// </summary>
 /// <param name="exitCode">The exit code to provide to the OS.</param>
 void bail(HRESULT exitCode) {
-    if (sourceDirectory != nullptr) {
-        free(sourceDirectory);
-        sourceDirectory = nullptr;
+    if (sourceDirectoryOrFile != nullptr) {
+        free(sourceDirectoryOrFile);
+        sourceDirectoryOrFile = nullptr;
     }
 
     if (destDirectory != nullptr) {
@@ -630,7 +666,7 @@ void banner(void) {
     
     
     printf("%s\n", banner);
-    printf("ShadowDuplicator -- Copyright (C) 2021 Peter Upfold\n");
+    printf("ShadowDuplicator -- Copyright (C) 2021-2022 Peter Upfold\n");
     printf("\n");
 }
 
@@ -640,6 +676,8 @@ void banner(void) {
 /// <param name=""></param>
 void usage(void) {
     printf("Usage: ShadowDuplicator.exe [OPTIONS] INI-FILE\n");
+    printf(" or single file mode:\n");
+    printf("Usage: ShadowDuplicator.exe -s [SOURCE] [DEST_DIRECTORY]\n");
     printf("Example: ShadowDuplicator.exe -q BackupConfig.ini\n");
     printf("\n");
     printf("\n");
@@ -652,6 +690,11 @@ void usage(void) {
     printf("The INI file should be as follows:\n\n");
     printf("[FileSet]\nSource = C:\\Users\\Public\\Documents\nDestination = D:\\test\n");
     printf("Do not include trailing slashes in paths.\n");
+    printf("\n");
+    printf("In single-file mode, the destination file will always have the same basename + extension\n");
+    printf("as the original source file. Only provide the destination DIRECTORY as the second argument.\n");
+    printf("\n");
+    printf("WARNING: Copies will always overwrite items in the destination.\n");
 }
 
 /// <summary>
