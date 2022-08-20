@@ -56,12 +56,12 @@ LPSTR destDirectory = nullptr;
 /// <summary>
 /// Wide string version of source directory to back up.
 /// </summary>
-LPWSTR sourceDirectoryWide = nullptr;
+LPWSTR sourceDirectoryOrFileWide = nullptr;
 
 /// <summary>
 /// The source directory without the drive specifier.
 /// </summary>
-LPWSTR sourceDirectoryWithoutDrive = nullptr;
+LPWSTR sourceDirectoryOrFileWithoutDrive = nullptr;
 
 /// <summary>
 /// Wide string version of destination directory.
@@ -98,6 +98,12 @@ BOOL quiet = FALSE;
 #define SHORT_SLEEP 500
 #define LONG_SLEEP 1500
 
+// exit codes
+#define SDEXIT_NO_DEST_DIR_SPECIFIED 1 | 0x20000000 // customer bit in HRESULT
+#define SDEXIT_NO_FIRST_FILE_IN_SOURCE 2 | 0x20000000
+#define SDEXIT_NO_SOURCE_SPECIFIED 3 | 0x20000000
+
+
 /// <summary>
 /// Entry point
 /// </summary>
@@ -126,21 +132,24 @@ int main(int argc, char** argv)
         exit(0);
     }
     for (int i = 1; i < argc; i++) {
-        if (argv[i] == "/?") {
+
+        if (strcmp(argv[i], "/?") == 0) {
             usage();
             exit(0);
         }
         // handle switches
-        if (argv[i][0] == (char)"-") {
-            if (argv[i] == "-q") {
+        if (argv[i][0] == '-') {
+            //TODO: check if use of strcmp is safe here -- can we assume arguments are null terminated correctly?
+            if (strcmp(argv[i], "-q") == 0) {
                 quiet = TRUE;
             }
-            if (argv[i] == "-h" || argv[i] == "--help" || argv[i] == "-?" || argv[i] == "--usage") {
+            if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "--usage") == 0) {
                 usage();
                 exit(0);
             }
-            if (argv[i] == "--singlefile" || argv[i] == "-s") {
+            if (strcmp(argv[i], "--singlefile") == 0 || strcmp(argv[i], "-s") == 0) {
                 singleFileMode = TRUE;
+                printf("Single file mode\n");
             }
         }
         
@@ -248,10 +257,24 @@ int main(int argc, char** argv)
     }
 
     // check the dest directory existence before we bother to set up VSS
+    if (sourceDirectoryOrFile == nullptr) {
+        printf("No source directory was specified.\n"); // friendlyError is not appropriate as this looks up Win32 error codes
+        bail(SDEXIT_NO_SOURCE_SPECIFIED);
+    }
+    if (destDirectory == nullptr) {
+        printf("No destination directory was specified.\n"); // friendlyError is not appropriate as this looks up Win32 error codes
+        bail(SDEXIT_NO_DEST_DIR_SPECIFIED);
+    }
     if (!PathFileExistsA(destDirectory)) {
         error = GetLastError();
         if (error) {
             friendlyError(L"The destination directory does not seem to exist.", error); //friendlyError will bail
+        }
+    }
+    if (!PathFileExistsA(sourceDirectoryOrFile)) {
+        error = GetLastError();
+        if (error) {
+            friendlyError(L"The source file does not seem to exist.", error); //friendlyError will bail
         }
     }
 
@@ -417,14 +440,14 @@ int main(int argc, char** argv)
     OutputDebugString(snapshotProp.m_pwszSnapshotDeviceObject);
 
     // make wide versions of source and dest
-    int sourceDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectoryOrFile, -1, sourceDirectoryWide, 0);
-    sourceDirectoryWide = (LPWSTR)malloc(sourceDirectoryWideBufferSize * 2);
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectoryOrFile, -1, sourceDirectoryWide, sourceDirectoryWideBufferSize);
+    int sourceDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectoryOrFile, -1, sourceDirectoryOrFileWide, 0);
+    sourceDirectoryOrFileWide = (LPWSTR)malloc(sourceDirectoryWideBufferSize * 2);
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectoryOrFile, -1, sourceDirectoryOrFileWide, sourceDirectoryWideBufferSize);
     int destDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destDirectory, -1, destDirectoryWide, 0);
     destDirectoryWide = (LPWSTR)malloc(destDirectoryWideBufferSize * 2);
     MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destDirectory, -1, destDirectoryWide, destDirectoryWideBufferSize);
 
-    // remove the device specification (C:\) from sourceDirectoryWide, so that it concats properly into the VSS device object specification
+    // remove the device specification (C:\) from sourceDirectoryOrFileWide, so that it concats properly into the VSS device object specification
 
     sourceDriveWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, 0); // get size first
     sourceDriveWide = (VSS_PWSZ)malloc(sourceDriveWideBufferSize * 2); // alloc that size (*2 -- returns number of chars)
@@ -432,54 +455,63 @@ int main(int argc, char** argv)
     // re-run to actually get chars into buffer
     MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, sourceDriveWideBufferSize);
 
-    sourceDirectoryWithoutDrive = (LPWSTR)malloc(wcslen(sourceDirectoryWide) * 2);
-    assert(sourceDirectoryWithoutDrive != nullptr);
+    sourceDirectoryOrFileWithoutDrive = (LPWSTR)malloc(wcslen(sourceDirectoryOrFileWide) * 2);
+    assert(sourceDirectoryOrFileWithoutDrive != nullptr);
     // pull into  new string starting at sourceDriveWide position
-    wcsncpy_s(sourceDirectoryWithoutDrive,
-        wcslen(sourceDirectoryWide),
-        &sourceDirectoryWide[wcslen(sourceDriveWide)],
-        wcslen(sourceDirectoryWide) - wcslen(sourceDriveWide)
+    wcsncpy_s(sourceDirectoryOrFileWithoutDrive,
+        wcslen(sourceDirectoryOrFileWide),
+        &sourceDirectoryOrFileWide[wcslen(sourceDriveWide)],
+        wcslen(sourceDirectoryOrFileWide) - wcslen(sourceDriveWide)
     );
 
     free(sourceDriveWide);
     sourceDriveWide = nullptr;
-
-    // calculate file paths
-    WCHAR sourcePathWithDeviceObject[MAX_PATH] = L"";
-    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH, L"%s\\%s\\*", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryWithoutDrive);
-
-    // find files in directory
-    HANDLE findHandle = INVALID_HANDLE_VALUE;
-    findHandle = FindFirstFile(sourcePathWithDeviceObject, &findData);
-
-    if (findHandle == INVALID_HANDLE_VALUE) {
-        printf("Unable to find the first file in the source.\n");
-        bail(2);
-    }
-
+    
     WCHAR sourcePathFile[MAX_PATH]{};
     WCHAR destinationPathFile[MAX_PATH]{};
 
-    do {
-        if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) {
-            continue;
+    // calculate file paths
+    WCHAR sourcePathWithDeviceObject[MAX_PATH] = L"";
+    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH, L"%s\\%s\\*", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive);
+
+    if (singleFileMode)
+    {
+
+    }
+    else
+    {
+        // multi-file mode
+         
+        // find files in directory
+        HANDLE findHandle = INVALID_HANDLE_VALUE;
+        findHandle = FindFirstFile(sourcePathWithDeviceObject, &findData);
+
+        if (findHandle == INVALID_HANDLE_VALUE) {
+            printf("Unable to find the first file in the source.\n");
+            bail(SDEXIT_NO_FIRST_FILE_IN_SOURCE);
         }
 
-        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            // does not currently back up sub directories
-            continue;
-        }
+        do {
+            if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) {
+                continue;
+            }
 
-        // build source and destination path for files
-        StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH, L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryWithoutDrive, findData.cFileName);
-        StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH, L"%s\\%s", destDirectoryWide, findData.cFileName);
+            if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                // does not currently back up sub directories
+                continue;
+            }
 
-        copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
-        if (copyError) {
-            bail(copyError);
-        }
+            // build source and destination path for files
+            StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH, L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive, findData.cFileName);
+            StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH, L"%s\\%s", destDirectoryWide, findData.cFileName);
 
-    } while (FindNextFile(findHandle, &findData) != 0);
+            copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
+            if (copyError) {
+                bail(copyError);
+            }
+
+        } while (FindNextFile(findHandle, &findData) != 0);
+    }
     
     // free writer metadata
     result = backupComponents->FreeWriterMetadata();
@@ -599,13 +631,13 @@ void bail(HRESULT exitCode) {
         free(destDirectory);
         destDirectory = nullptr;
     }
-    if (sourceDirectoryWide != nullptr) {
-        free(sourceDirectoryWide);
-        sourceDirectoryWide = nullptr;
+    if (sourceDirectoryOrFileWide != nullptr) {
+        free(sourceDirectoryOrFileWide);
+        sourceDirectoryOrFileWide = nullptr;
     }
-    if (sourceDirectoryWithoutDrive != nullptr) {
-        free(sourceDirectoryWithoutDrive);
-        sourceDirectoryWithoutDrive = nullptr;
+    if (sourceDirectoryOrFileWithoutDrive != nullptr) {
+        free(sourceDirectoryOrFileWithoutDrive);
+        sourceDirectoryOrFileWithoutDrive = nullptr;
     }
     if (destDirectoryWide != nullptr) {
         free(destDirectoryWide);
@@ -667,6 +699,7 @@ void banner(void) {
     
     printf("%s\n", banner);
     printf("ShadowDuplicator -- Copyright (C) 2021-2022 Peter Upfold\n");
+    printf("https://peter.upfold.org.uk/projects/shadowduplicator\n");
     printf("\n");
 }
 
@@ -678,13 +711,16 @@ void usage(void) {
     printf("Usage: ShadowDuplicator.exe [OPTIONS] INI-FILE\n");
     printf(" or single file mode:\n");
     printf("Usage: ShadowDuplicator.exe -s [SOURCE] [DEST_DIRECTORY]\n");
-    printf("Example: ShadowDuplicator.exe -q BackupConfig.ini\n");
+    printf("\n");
+    printf("Multi File Example:  ShadowDuplicator.exe -q BackupConfig.ini\n");
+    printf("Single File Example: ShadowDuplicator.exe -q -s SourceFile.txt D:\\DestDirectory\n");
     printf("\n");
     printf("\n");
     printf("\n");
     printf("Options:\n");
     printf("-h, --help, -?, /?, --usage     Print this help message\n");
     printf("-q                              Silence the banner and any progress messages\n");
+    printf("-s, --singlefile                Single file mode -- copy one source file to the destination directory only\n");
     printf("\n");
     printf("The path to the INI file must not begin with '-'.\n");
     printf("The INI file should be as follows:\n\n");
