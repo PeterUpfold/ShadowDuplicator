@@ -391,9 +391,8 @@ int main(int argc, char** argv)
     vssAsync->Release();
     vssAsync = nullptr;
 
-    // verify writer status
-    result = backupComponents->GatherWriterStatus(&vssAsync);
-    // TODO finish this
+    // verify all VSS writers are in the correct state
+    VerifyWriterStatus();
 
     // request shadow copy
 
@@ -431,7 +430,8 @@ int main(int argc, char** argv)
     vssAsync->Release();
     vssAsync = nullptr;
 
-    //TODO we should verify writer status 
+    // verify all VSS writers are in the correct state
+    VerifyWriterStatus();
 
     // GetSnapshotProperties to get device to copy from
     result = backupComponents->GetSnapshotProperties(*snapshotId, &snapshotProp);
@@ -681,6 +681,94 @@ void bail(HRESULT exitCode) {
         CoUninitialize();
     }
     exit(exitCode);
+}
+
+/// <summary>
+/// Verify the VSS writers are all in the correct state.
+/// </summary>
+/// <param name=""></param>
+void VerifyWriterStatus(void) {
+    HRESULT result = E_FAIL;
+    HRESULT asyncResult = E_FAIL;
+
+    // verify writer status
+    result = backupComponents->GatherWriterStatus(&vssAsync);
+    genericFailCheck("GatherWriterStatus", result);
+    assert(vssAsync != nullptr);
+    while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
+        Sleep(SHORT_SLEEP);
+        result = vssAsync->QueryStatus(&asyncResult, NULL);
+        if (result != S_OK) {
+            printf("Unable to query vss async status -- %x\n", result);
+            vssAsync->Release();
+            vssAsync = nullptr;
+            bail(result);
+        }
+        if (!quiet) {
+            OutputDebugString(L"Waiting for GatherWriterStatus VSS status...\n");
+            spinProgress();
+        }
+    }
+
+    if (asyncResult == VSS_S_ASYNC_CANCELLED) {
+        printf("Operation was cancelled.");
+        vssAsync->Release();
+        vssAsync = nullptr;
+        bail(asyncResult);
+    }
+
+    // get count of writers
+    UINT writerCount = 0;
+    result = backupComponents->GetWriterStatusCount(&writerCount);
+    if (result != S_OK) {
+        printf("Unable to get count of writers -- %x\n", result);
+        backupComponents->FreeWriterStatus();
+        vssAsync->Release();
+        vssAsync = nullptr;
+        bail(result);
+    }
+
+    // check status of writers
+    for (UINT i = 0; i < writerCount; i++) {
+        VSS_ID pidInstance = {};
+        VSS_ID pidWriter = {};
+        BSTR nameOfWriter = nullptr;
+        VSS_WRITER_STATE state = { };
+        HRESULT vssFailure = {};
+        WCHAR writerDebugString[512] = {};
+        result = backupComponents->GetWriterStatus(i, &pidInstance, &pidWriter, &nameOfWriter, &state, &vssFailure);
+        if (result != S_OK) {
+            printf("Unable to get status of VSS writer %i -- %x\n", i, result);
+            SysFreeString(nameOfWriter); //safe even if nameOfWriter == nullptr
+            backupComponents->FreeWriterStatus();
+            vssAsync->Release();
+            vssAsync = nullptr;
+            bail(result);
+        }
+
+        if (!quiet) {
+            StringCbPrintf(writerDebugString, 511, L"Status of writer %i (%s) is 0x%x.\n", i, nameOfWriter, vssFailure);
+            OutputDebugString(writerDebugString);
+        }
+
+        if (vssFailure == 0) {
+            // this writer is happy
+            SysFreeString(nameOfWriter);
+            continue;
+        }
+
+        StringCbPrintf(writerDebugString, 511, L"Unable to proceed, as the status of VSS writer %i (%s) is 0x%x.\n", i, nameOfWriter, vssFailure);
+        OutputDebugString(writerDebugString);
+        wprintf(writerDebugString);
+
+        SysFreeString(nameOfWriter);
+        backupComponents->FreeWriterStatus();
+        vssAsync->Release();
+        vssAsync = nullptr;
+        bail(vssFailure);
+    }
+
+    backupComponents->FreeWriterStatus();
 }
 
 /// <summary>

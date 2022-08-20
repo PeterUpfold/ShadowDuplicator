@@ -36,3 +36,4 @@ LPPROGRESS_ROUTINE copyProgress(
 	HANDLE hDestinationFile,
 	LPVOID lpData
 );
+void VerifyWriterStatus(void);
