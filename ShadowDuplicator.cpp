@@ -441,19 +441,7 @@ int main(int argc, char** argv)
         StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH, L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryWithoutDrive, findData.cFileName);
         StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH, L"%s\\%s", destDirectoryWide, findData.cFileName);
 
-        if (!quiet) {
-            wprintf(L"%s -> %s\n", sourcePathFile, destinationPathFile);
-        }        
-        
-        BOOL copyResult = CopyFileEx(sourcePathFile, destinationPathFile, (LPPROGRESS_ROUTINE)&copyProgress, NULL, FALSE, 0);
-
-        if (!copyResult) {
-            error = GetLastError();
-            if (error) {
-                friendlyCopyError(L"Failed to copy to ", destinationPathFile, error); // friendlyCopyError does not bail for us
-                bail(error);
-            }
-        }
+        ShadowCopyFile(sourcePathFile, destinationPathFile);
 
     } while (FindNextFile(findHandle, &findData) != 0);
     
@@ -468,6 +456,33 @@ int main(int argc, char** argv)
     }
 
     bail(0);
+}
+
+/// <summary>
+/// Perform the copy of a file from the source path to the destination.
+/// </summary>
+/// <param name="sourcePathFile">The source path, with the VSS snapshot device object already substituted in</param>
+/// <param name="destinationPathFile">The destination path</param>
+/// <returns>0 on success, or the DWORD from GetLastError() upon failure</returns>
+DWORD ShadowCopyFile(WCHAR  sourcePathFile[260], WCHAR  destinationPathFile[260])
+{
+    DWORD error = 0;
+
+    if (!quiet) {
+        wprintf(L"%s -> %s\n", sourcePathFile, destinationPathFile);
+    }
+
+    BOOL copyResult = CopyFileEx(sourcePathFile, destinationPathFile, (LPPROGRESS_ROUTINE)&copyProgress, NULL, FALSE, 0);
+
+    if (!copyResult) {
+        error = GetLastError();
+        if (error) {
+            friendlyCopyError(L"Failed to copy to ", destinationPathFile, error); // friendlyCopyError does not bail for us
+            return error;
+        }
+    }
+
+    return error;
 }
 
 /// <summary>

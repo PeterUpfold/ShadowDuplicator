@@ -19,6 +19,7 @@ is no warranty.
 
 void genericFailCheck(const char* operationName, HRESULT result);
 void friendlyError(LPCWSTR ourErrorDescription, const DWORD error);
+DWORD ShadowCopyFile(WCHAR  sourcePathFile[260], WCHAR  destinationPathFile[260]);
 void friendlyCopyError(LPCWSTR ourErrorDescription, LPWSTR destinationFile, const DWORD error);
 void bail(HRESULT exitCode);
 void banner(void);
