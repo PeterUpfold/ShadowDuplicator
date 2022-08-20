@@ -483,13 +483,18 @@ int main(int argc, char** argv)
 
     // calculate file paths
     WCHAR sourcePathWithDeviceObject[MAX_PATH] = L"";
-    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH, L"%s\\%s\\*", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive);
+    WCHAR directorySpec[3] = L"";
+    if (!singleFileMode) {
+        StringCbPrintf(directorySpec, (3 * sizeof(WCHAR)) /* turns out this in bytes */, L"\\*");
+    }
+
+    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH * sizeof(WCHAR), L"%s\\%s%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive, directorySpec);
 
     if (singleFileMode)
     {
         // build source and dest path
-        StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH, L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive);
-        StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH, L"%s", destDirectoryWide);
+        StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive);
+        StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s", destDirectoryWide);
 
         copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
         if (copyError) {
@@ -523,8 +528,8 @@ int main(int argc, char** argv)
             }
 
             // build source and destination path for files
-            StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH, L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive, findData.cFileName);
-            StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH, L"%s\\%s", destDirectoryWide, findData.cFileName);
+            StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive, findData.cFileName);
+            StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", destDirectoryWide, findData.cFileName);
 
             copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
             if (copyError) {
@@ -541,7 +546,35 @@ int main(int argc, char** argv)
     VssFreeSnapshotProperties(&snapshotProp);
 
     if (!quiet) {
-        printf("Completed all copy operations successfully.\n");
+        printf("Completed all copy operations successfully.\n\n");
+        printf("Notifying VSS components of the completion of the backup...\n");
+    }
+
+    // set backup succeeded
+
+    asyncResult = E_FAIL;
+    result = backupComponents->BackupComplete(&vssAsync);
+    genericFailCheck("BackupComplete", result);
+
+    while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
+        Sleep(SHORT_SLEEP);
+        result = vssAsync->QueryStatus(&asyncResult, NULL);
+        if (result != S_OK) {
+            printf("Unable to query vss async status -- %x\n", result);
+            bail(result);
+        }
+
+        if (!quiet) {
+            OutputDebugString(L"Waiting for BackupComplete status...\n");
+            spinProgress();
+        }
+    }
+
+    // final verification of writer status
+    VerifyWriterStatus();
+
+    if (!quiet) {
+        printf("All operations completed.\n");
     }
 
     bail(0);
@@ -768,7 +801,7 @@ void VerifyWriterStatus(void) {
         }
 
         if (!quiet) {
-            StringCbPrintf(writerDebugString, 511, L"Status of writer %i (%s) is 0x%x.\n", i, nameOfWriter, vssFailure);
+            StringCbPrintf(writerDebugString, 511 * sizeof(WCHAR), L"Status of writer %i (%s) is 0x%x.\n", i, nameOfWriter, vssFailure);
             OutputDebugString(writerDebugString);
         }
 
@@ -778,7 +811,7 @@ void VerifyWriterStatus(void) {
             continue;
         }
 
-        StringCbPrintf(writerDebugString, 511, L"Unable to proceed, as the status of VSS writer %i (%s) is 0x%x.\n", i, nameOfWriter, vssFailure);
+        StringCbPrintf(writerDebugString, 511 * sizeof(WCHAR), L"Unable to proceed, as the status of VSS writer %i (%s) is 0x%x.\n", i, nameOfWriter, vssFailure);
         OutputDebugString(writerDebugString);
         wprintf(writerDebugString);
 
