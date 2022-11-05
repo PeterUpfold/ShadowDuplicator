@@ -23,6 +23,8 @@ is no warranty.
 
 #define assert(expression) if (!(expression)) { printf("assert on %d", __LINE__); bail(250); }
 
+#define SDVERSION L"v0.5-wide"
+
 /// <summary>
 /// The backup components VSS object.
 /// </summary>
@@ -46,12 +48,12 @@ VSS_ID* snapshotId = nullptr;
 /// <summary>
 /// The source directory to back up.
 /// </summary>
-LPSTR sourceDirectoryOrFile = nullptr;
+LPWSTR sourceDirectoryOrFile = nullptr;
 
 /// <summary>
 /// The destination directory where backed up files should be copied.
 /// </summary>
-LPSTR destDirectory = nullptr;
+LPWSTR destDirectory = nullptr;
 
 /// <summary>
 /// Wide string version of source directory to back up.
@@ -71,13 +73,13 @@ LPWSTR destDirectoryWide = nullptr;
 /// <summary>
 /// The source drive of which to make a shadow copy.
 /// </summary>
-LPSTR sourceDrive = nullptr;
+LPWSTR sourceDrive = nullptr;
 
 /// <summary>
 /// The canonical, fully qualified path to the INI file which provides
 /// options for this execution run.
 /// </summary>
-LPSTR canonicalINIPath = nullptr;
+LPWSTR canonicalINIPath = nullptr;
 
 /// <summary>
 /// Is COM initialized? For only calling CoUninitialize() in bail() if we 
@@ -110,7 +112,7 @@ BOOL quiet = FALSE;
 /// <param name="argc"></param>
 /// <param name="argv"></param>
 /// <returns></returns>
-int main(int argc, char** argv)
+int wmain(int argc, WCHAR** argv)
 {
     HRESULT result = E_FAIL;
     HRESULT asyncResult = E_FAIL;
@@ -119,12 +121,16 @@ int main(int argc, char** argv)
     DWORD fileAttributes = INVALID_FILE_ATTRIBUTES;
     DWORD error = 0;
     DWORD copyError = 0;
-    BOOL singleFileMode = FALSE;
+    BOOL selectedFilesMode = FALSE;
 
     WIN32_FIND_DATA findData{};
 
     int lastSwitchArgument = 1; // the index of the last command line arg that was a switch
     BOOL switchArgumentsComplete = FALSE;
+
+    // length of allocated space for source filenames
+    uint64_t sourceFilenamesLength = 0;
+
 
     // loop over command line options -- _very_ simple parsing
     if (argc < 2) {
@@ -133,22 +139,22 @@ int main(int argc, char** argv)
     }
     for (int i = 1; i < argc; i++) {
 
-        if (strcmp(argv[i], "/?") == 0) {
+        if (wcscmp(argv[i], L"/?") == 0) {
             usage();
             exit(0);
         }
         // handle switches
-        if (argv[i][0] == '-') {
+        if (argv[i][0] == L'-') {
             //TODO: check if use of strcmp is safe here -- can we assume arguments are null terminated correctly?
-            if (strcmp(argv[i], "-q") == 0) {
+            if (wcscmp(argv[i], L"-q") == 0) {
                 quiet = TRUE;
             }
-            if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "--usage") == 0) {
+            if (wcscmp(argv[i], L"-h") == 0 || wcscmp(argv[i], L"--help") == 0 || wcscmp(argv[i], L"-?") == 0 || wcscmp(argv[i], L"--usage") == 0) {
                 usage();
                 exit(0);
             }
-            if (strcmp(argv[i], "--singlefile") == 0 || strcmp(argv[i], "-s") == 0) {
-                singleFileMode = TRUE;
+            if (wcscmp(argv[i], L"--singlefile") == 0 || wcscmp(argv[i], L"-s") == 0) {
+                selectedFilesMode = TRUE;
             }
             ++lastSwitchArgument;
         }
@@ -159,40 +165,43 @@ int main(int argc, char** argv)
                 switchArgumentsComplete = TRUE;
             }
 
-            if (singleFileMode) { // get source and dest path
+            if (selectedFilesMode) { // get source and dest path
                 
                 // allocate space for source and destination paths
                 if (sourceDirectoryOrFile == nullptr) {
-                    sourceDirectoryOrFile = (LPSTR)malloc(MAX_PATH);
+                    sourceDirectoryOrFile = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
                 }
                 if (destDirectory == nullptr) {
-                    destDirectory = (LPSTR)malloc(MAX_PATH);
+                    destDirectory = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
                 }
                 
                 assert(sourceDirectoryOrFile != nullptr);
                 assert(destDirectory != nullptr);
 
-                // usage: ShadowDuplicator -s [source] [dest]
-                if (i == lastSwitchArgument + 1) {
-                    StringCbPrintfA(sourceDirectoryOrFile, MAX_PATH, "%s", argv[i]);
+                // usage: ShadowDuplicator -s [source] [source] [source] [dest]
+                if (i != (argc - 1)) {
+                    StringCbPrintfW(sourceDirectoryOrFile, MAX_PATH, L"%s", argv[i]);
 
+                    //TODO will need to allocate many of these
+                    // 
+                    // 
                     // get source drive from source directory
-                    sourceDrive = (LPSTR)malloc(MAX_PATH);
+                    sourceDrive = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
                     assert(sourceDrive != nullptr);
 
-                    if (!GetVolumePathNameA(sourceDirectoryOrFile, sourceDrive, MAX_PATH)) {
+                    if (!GetVolumePathNameW(sourceDirectoryOrFile, sourceDrive, MAX_PATH)) {
                         error = GetLastError();
                         if (error) {
                             friendlyError(L"Failed to get Source Drive from Source Directory", error);
                         }
                     }
                 }
-                if (i == lastSwitchArgument + 2) {
-                    StringCbPrintfA(destDirectory, MAX_PATH, "%s", argv[i]);
+                else { // last argument is dest
+                    StringCbPrintfW(destDirectory, MAX_PATH, L"%s", argv[i]);
                 }
             }
-            else { // multi-file mode -- check INI file
-                fileAttributes = GetFileAttributesA(argv[i]);
+            else { // directory mode -- check INI file
+                fileAttributes = GetFileAttributesW(argv[i]);
 
                 if (fileAttributes == INVALID_FILE_ATTRIBUTES) {
                     error = GetLastError();
@@ -200,27 +209,27 @@ int main(int argc, char** argv)
                     exit(error);
                 }
 
-                canonicalINIPath = (LPSTR)malloc(MAX_PATH);
+                canonicalINIPath = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
 
                 // canonicalise path
-                if (!(GetFullPathNameA(argv[i], MAX_PATH, canonicalINIPath, NULL))) {
+                if (!(GetFullPathNameW(argv[i], MAX_PATH, canonicalINIPath, NULL))) {
                     error = GetLastError();
                     friendlyError(L"Failed to get full path name of specified INI file", error);
                     exit(error);
                 }
 
                 // allocate space for source and destination paths
-                sourceDirectoryOrFile = (LPSTR)malloc(MAX_PATH);
-                destDirectory = (LPSTR)malloc(MAX_PATH);
+                sourceDirectoryOrFile = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
+                destDirectory = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
 
                 assert(sourceDirectoryOrFile != nullptr);
                 assert(destDirectory != nullptr);
             
                 // get source from INI
-                GetPrivateProfileStringA(
-                    "FileSet",
-                    "Source",
-                    "",
+                GetPrivateProfileStringW(
+                    L"FileSet",
+                    L"Source",
+                    L"",
                     sourceDirectoryOrFile,
                     MAX_PATH,
                     canonicalINIPath
@@ -233,10 +242,10 @@ int main(int argc, char** argv)
                 }
 
                 // get dest from INI
-                GetPrivateProfileStringA(
-                    "FileSet",
-                    "Destination",
-                    "",
+                GetPrivateProfileStringW(
+                    L"FileSet",
+                    L"Destination",
+                    L"",
                     destDirectory,
                     MAX_PATH,
                     canonicalINIPath
@@ -249,10 +258,10 @@ int main(int argc, char** argv)
 
 
                 // get source drive from source directory
-                sourceDrive = (LPSTR)malloc(MAX_PATH);
+                sourceDrive = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
                 assert(sourceDrive != nullptr);
 
-                if (!GetVolumePathNameA(sourceDirectoryOrFile, sourceDrive, MAX_PATH)) {
+                if (!GetVolumePathNameW(sourceDirectoryOrFile, sourceDrive, MAX_PATH)) {
                     error = GetLastError();
                     if (error) {
                         friendlyError(L"Failed to get Source Drive from Source Directory", error);
@@ -276,13 +285,13 @@ int main(int argc, char** argv)
         printf("No destination directory was specified.\n"); // friendlyError is not appropriate as this looks up Win32 error codes
         bail(SDEXIT_NO_DEST_DIR_SPECIFIED);
     }
-    if (!singleFileMode && !PathFileExistsA(destDirectory)) { //TODO: can we add to this checking dest dir in single file mode?
+    if (!selectedFilesMode && !PathFileExistsW(destDirectory)) { //TODO: can we add to this checking dest dir in selected file mode?
         error = GetLastError();
         if (error) {
             friendlyError(L"The destination directory does not seem to exist.", error); //friendlyError will bail
         }
     }
-    if (!PathFileExistsA(sourceDirectoryOrFile)) {
+    if (!PathFileExistsW(sourceDirectoryOrFile)) {
         error = GetLastError();
         if (error) {
             friendlyError(L"The source file does not seem to exist.", error); //friendlyError will bail
@@ -359,16 +368,7 @@ int main(int argc, char** argv)
     assert(snapshotId != nullptr);
 
     // add volume to snapshot set AddToSnapshotSet
-    VSS_PWSZ sourceDriveWide = nullptr;
-    int sourceDriveWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, 0); // get size first
-    sourceDriveWide = (VSS_PWSZ)malloc(sourceDriveWideBufferSize*2); // alloc that size (*2 -- returns number of chars)
-    assert(sourceDriveWide != nullptr);
-    // re-run to actually get chars into buffer
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, sourceDriveWideBufferSize);
-    
-    result = backupComponents->AddToSnapshotSet(sourceDriveWide, GUID_NULL, snapshotId);
-    free(sourceDriveWide);
-    sourceDriveWide = nullptr;
+    result = backupComponents->AddToSnapshotSet(sourceDrive, GUID_NULL, snapshotId);
     genericFailCheck("AddToSnapshotSet", result);
 
     // notify writers of impending backup
@@ -450,33 +450,15 @@ int main(int argc, char** argv)
 
     OutputDebugString(snapshotProp.m_pwszSnapshotDeviceObject);
 
-    // make wide versions of source and dest
-    int sourceDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectoryOrFile, -1, sourceDirectoryOrFileWide, 0);
-    sourceDirectoryOrFileWide = (LPWSTR)malloc(sourceDirectoryWideBufferSize * 2);
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectoryOrFile, -1, sourceDirectoryOrFileWide, sourceDirectoryWideBufferSize);
-    int destDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destDirectory, -1, destDirectoryWide, 0);
-    destDirectoryWide = (LPWSTR)malloc(destDirectoryWideBufferSize * 2);
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destDirectory, -1, destDirectoryWide, destDirectoryWideBufferSize);
-
     // remove the device specification (C:\) from sourceDirectoryOrFileWide, so that it concats properly into the VSS device object specification
-
-    sourceDriveWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, 0); // get size first
-    sourceDriveWide = (VSS_PWSZ)malloc(sourceDriveWideBufferSize * 2); // alloc that size (*2 -- returns number of chars)
-    assert(sourceDriveWide != nullptr);
-    // re-run to actually get chars into buffer
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, sourceDriveWideBufferSize);
-
-    sourceDirectoryOrFileWithoutDrive = (LPWSTR)malloc(wcslen(sourceDirectoryOrFileWide) * 2);
+    sourceDirectoryOrFileWithoutDrive = (LPWSTR)malloc(wcslen(sourceDirectoryOrFile) * sizeof(WCHAR));
     assert(sourceDirectoryOrFileWithoutDrive != nullptr);
     // pull into  new string starting at sourceDriveWide position
     wcsncpy_s(sourceDirectoryOrFileWithoutDrive,
         wcslen(sourceDirectoryOrFileWide),
-        &sourceDirectoryOrFileWide[wcslen(sourceDriveWide)],
-        wcslen(sourceDirectoryOrFileWide) - wcslen(sourceDriveWide)
+        &sourceDirectoryOrFileWide[wcslen(sourceDrive)],
+        wcslen(sourceDirectoryOrFileWide) - wcslen(sourceDrive)
     );
-
-    free(sourceDriveWide);
-    sourceDriveWide = nullptr;
     
     WCHAR sourcePathFile[MAX_PATH]{};
     WCHAR destinationPathFile[MAX_PATH]{};
@@ -484,13 +466,13 @@ int main(int argc, char** argv)
     // calculate file paths
     WCHAR sourcePathWithDeviceObject[MAX_PATH] = L"";
     WCHAR directorySpec[3] = L"";
-    if (!singleFileMode) {
+    if (!selectedFilesMode) {
         StringCbPrintf(directorySpec, (3 * sizeof(WCHAR)) /* turns out this in bytes */, L"\\*");
     }
 
     StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH * sizeof(WCHAR), L"%s\\%s%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive, directorySpec);
 
-    if (singleFileMode)
+    if (selectedFilesMode)
     {
         // build source and dest path
         StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive);
@@ -841,6 +823,8 @@ void banner(void) {
     
     printf("%s\n", banner);
     printf("ShadowDuplicator -- Copyright (C) 2021-2022 Peter Upfold\n");
+    wprintf(SDVERSION);
+    printf("\n");
     printf("https://peter.upfold.org.uk/projects/shadowduplicator\n");
     printf("\n");
 }
