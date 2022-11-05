@@ -56,19 +56,9 @@ LPWSTR sourceDirectoryOrFile = nullptr;
 LPWSTR destDirectory = nullptr;
 
 /// <summary>
-/// Wide string version of source directory to back up.
-/// </summary>
-LPWSTR sourceDirectoryOrFileWide = nullptr;
-
-/// <summary>
 /// The source directory without the drive specifier.
 /// </summary>
 LPWSTR sourceDirectoryOrFileWithoutDrive = nullptr;
-
-/// <summary>
-/// Wide string version of destination directory.
-/// </summary>
-LPWSTR destDirectoryWide = nullptr;
 
 /// <summary>
 /// The source drive of which to make a shadow copy.
@@ -130,6 +120,9 @@ int wmain(int argc, WCHAR** argv)
 
     // length of allocated space for source filenames
     uint64_t sourceFilenamesLength = 0;
+
+    // source filenames in one big lump, separated by nullchars
+    LPWSTR sourceFilenames = nullptr;
 
 
     // loop over command line options -- _very_ simple parsing
@@ -455,9 +448,9 @@ int wmain(int argc, WCHAR** argv)
     assert(sourceDirectoryOrFileWithoutDrive != nullptr);
     // pull into  new string starting at sourceDriveWide position
     wcsncpy_s(sourceDirectoryOrFileWithoutDrive,
-        wcslen(sourceDirectoryOrFileWide),
-        &sourceDirectoryOrFileWide[wcslen(sourceDrive)],
-        wcslen(sourceDirectoryOrFileWide) - wcslen(sourceDrive)
+        wcslen(sourceDirectoryOrFile),
+        &sourceDirectoryOrFile[wcslen(sourceDrive)],
+        wcslen(sourceDirectoryOrFile) - wcslen(sourceDrive)
     );
     
     WCHAR sourcePathFile[MAX_PATH]{};
@@ -476,7 +469,7 @@ int wmain(int argc, WCHAR** argv)
     {
         // build source and dest path
         StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive);
-        StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s", destDirectoryWide);
+        StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s", destDirectory);
 
         copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
         if (copyError) {
@@ -511,7 +504,7 @@ int wmain(int argc, WCHAR** argv)
 
             // build source and destination path for files
             StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive, findData.cFileName);
-            StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", destDirectoryWide, findData.cFileName);
+            StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", destDirectory, findData.cFileName);
 
             copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
             if (copyError) {
@@ -667,17 +660,9 @@ void bail(HRESULT exitCode) {
         free(destDirectory);
         destDirectory = nullptr;
     }
-    if (sourceDirectoryOrFileWide != nullptr) {
-        free(sourceDirectoryOrFileWide);
-        sourceDirectoryOrFileWide = nullptr;
-    }
     if (sourceDirectoryOrFileWithoutDrive != nullptr) {
         free(sourceDirectoryOrFileWithoutDrive);
         sourceDirectoryOrFileWithoutDrive = nullptr;
-    }
-    if (destDirectoryWide != nullptr) {
-        free(destDirectoryWide);
-        destDirectoryWide = nullptr;
     }
 
     if (canonicalINIPath != nullptr) {
@@ -824,7 +809,7 @@ void banner(void) {
     printf("%s\n", banner);
     printf("ShadowDuplicator -- Copyright (C) 2021-2022 Peter Upfold\n");
     wprintf(SDVERSION);
-    printf("\n");
+    printf("\n\n");
     printf("https://peter.upfold.org.uk/projects/shadowduplicator\n");
     printf("\n");
 }
@@ -834,6 +819,9 @@ void banner(void) {
 /// </summary>
 /// <param name=""></param>
 void usage(void) {
+    printf("ShadowDuplicator -- Copyright (C) 2021-2022 Peter Upfold\n");
+    wprintf(SDVERSION);
+    printf("\n\n");
     printf("Usage: ShadowDuplicator.exe [OPTIONS] INI-FILE\n");
     printf(" or single file mode:\n");
     printf("Usage: ShadowDuplicator.exe -s [SOURCE] [DEST_DIRECTORY_AND_FILENAME]\n");
