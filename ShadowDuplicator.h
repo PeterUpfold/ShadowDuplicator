@@ -37,3 +37,4 @@ LPPROGRESS_ROUTINE copyProgress(
 	LPVOID lpData
 );
 void VerifyWriterStatus(void);
+void FreeSourceStructures(void);

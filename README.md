@@ -55,11 +55,14 @@ have been completed successfully.
 Additionally, the following exit codes are specific to ShadowDuplicator and indicate the following
 conditions:
 
-| Code (hex) | Code (dec) | Constant                       | Meaning                                                |
-| ---------- | ---------- | ------------------------------ | ------------------------------------------------------ |
-| 0x20000001 | 536870913  | SDEXIT_NO_DEST_DIR_SPECIFIED   | No destination directory specified on command line.    |
-| 0x20000002 | 536870914  | SDEXIT_NO_FIRST_FILE_IN_SOURCE | Could not find any files in the source directory.      |
-| 0x20000003 | 536870915  | SDEXIT_NO_SOURCE_SPECIFIED     | No source file or directory specified on command line. |
+| Code (hex) | Code (dec) | Constant                                 | Meaning                                                |
+| ---------- | ---------- | ---------------------------------------- | ------------------------------------------------------ |
+| 0x20000001 | 536870913  | SDEXIT_NO_DEST_DIR_SPECIFIED             | No destination directory specified on command line.    |
+| 0x20000002 | 536870914  | SDEXIT_NO_FIRST_FILE_IN_SOURCE           | Could not find any files in the source directory.      |
+| 0x20000003 | 536870915  | SDEXIT_NO_SOURCE_SPECIFIED               | No source file or directory specified on command line. |
+| 0x20000004 | 536870916  | SDEXIT_SOURCE_FILES_ON_DIFFERENT_VOLUMES | All source files must be on the same volume. This error is returned if this constraint is violated. |
+
+SDEXIT_SOURCE_FILES_ON_DIFFERENT_VOLUMES 4 | 0x20000000
 
 ## Disclaimer
 

@@ -58,11 +58,6 @@ VSS_ID* snapshotId = nullptr;
 LPWSTR destDirectory = nullptr;
 
 /// <summary>
-/// The source directory without the drive specifier.
-/// </summary>
-LPWSTR sourceDirectoryOrFileWithoutDrive = nullptr;
-
-/// <summary>
 /// The canonical, fully qualified path to the INI file which provides
 /// options for this execution run.
 /// </summary>
@@ -84,6 +79,52 @@ int progressMarker = 0;
 /// </summary>
 BOOL quiet = FALSE;
 
+/// <summary>
+/// Head of source drive specifications (C:\, D:\) for each source file. Linked list structure.
+/// </summary>
+t_sourceList* sourceDrives = nullptr;
+
+/// <summary>
+/// Head of source filenames in the linked list structure.
+/// </summary>
+t_sourceList* sourceFilenames = nullptr;
+
+/// <summary>
+/// Pointer to the current drive we are dealing with.
+/// </summary>
+t_sourceList* currentSourceDrive = sourceDrives;
+
+/// <summary>
+/// Pointer to the current filename we are dealing with.
+/// </summary>
+t_sourceList* currentSourceFilename = sourceFilenames;
+
+/// <summary>
+/// The previous pointer to the drive we were working with. This is so we can update the next pointer.
+/// </summary>
+t_sourceList* previousSourceDrive = sourceDrives;
+
+/// <summary>
+/// The previous pointer to the filename we were working with.
+/// </summary>
+t_sourceList* previousSourceFilename = sourceFilenames;
+
+/// <summary>
+/// Head of list of source filenames with the source drive specification sliced off.
+/// </summary>
+t_sourceList* sourceFilenamesWithoutDrives = nullptr;
+
+/// <summary>
+/// Current pointer of where we are in the source filenames with the source drive specification sliced off.
+/// </summary>
+t_sourceList* currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
+
+/// <summary>
+/// The previous pointer to the source filenames with the source drive specification sliced off.
+/// </summary>
+t_sourceList* previousSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
+
+
 #define SHORT_SLEEP 500
 #define LONG_SLEEP 1500
 
@@ -91,6 +132,7 @@ BOOL quiet = FALSE;
 #define SDEXIT_NO_DEST_DIR_SPECIFIED 1 | 0x20000000 // customer bit in HRESULT
 #define SDEXIT_NO_FIRST_FILE_IN_SOURCE 2 | 0x20000000
 #define SDEXIT_NO_SOURCE_SPECIFIED 3 | 0x20000000
+#define SDEXIT_SOURCE_FILES_ON_DIFFERENT_VOLUMES 4 | 0x20000000
 
 
 /// <summary>
@@ -115,19 +157,6 @@ int wmain(int argc, WCHAR** argv)
     int lastSwitchArgument = 1; // the index of the last command line arg that was a switch
     BOOL switchArgumentsComplete = FALSE;
 
-    // source filenames in one big lump, separated by nullchars
-    t_sourceList* sourceDrives = nullptr;
-    t_sourceList* sourceFilenames = nullptr;
-
-    t_sourceList* currentSourceDrive = sourceDrives;
-    t_sourceList* currentSourceFilename = sourceFilenames;
-
-    t_sourceList* previousSourceDrive = sourceDrives;
-    t_sourceList* previousSourceFilename = sourceFilenames;
-
-    t_sourceList* sourceFilenamesWithoutDrives = nullptr;
-    t_sourceList* currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
-    t_sourceList* previousSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
 
 
     // loop over command line options -- _very_ simple parsing
@@ -379,7 +408,7 @@ int wmain(int argc, WCHAR** argv)
         printf("Waiting for VSS writers to be ready...\n");
     }
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
-        Sleep(500);
+        Sleep(SHORT_SLEEP);
         result = vssAsync->QueryStatus(&asyncResult, NULL);
         if (result != S_OK) {
             printf("Unable to query vss async status -- %x\n", result);
@@ -419,14 +448,35 @@ int wmain(int argc, WCHAR** argv)
     snapshotId = (VSS_ID*)malloc(sizeof(VSS_ID));
     assert(snapshotId != nullptr);
 
-    // add volumes to snapshot set AddToSnapshotSet
+    // add volumes to snapshot set AddToSnapshotSet -- we will only add the first drive spec -- all source files must be on the same volume
     currentSourceDrive = sourceDrives;
+    currentSourceFilename = sourceFilenames;
+    WCHAR volumeAddedToSnapshot[4]{};
     do {
         assert(currentSourceDrive->source != nullptr);
+
+        if (wcslen(volumeAddedToSnapshot) < 1) {
+            // this is the volume we will add to the snapshot -- make a note
+            StringCbPrintfW(volumeAddedToSnapshot, 4 * sizeof(WCHAR), L"%s", currentSourceDrive->source);
+        }
+        else if (wcscmp(volumeAddedToSnapshot, currentSourceDrive->source) == 0) {
+            // on the same volume, skip
+            currentSourceDrive = currentSourceDrive->next;
+            currentSourceFilename = currentSourceFilename->next;
+            continue;
+        }
+        else {
+            // it is not the same volume, bail
+            backupComponents->AbortBackup();
+            wprintf(L"All source files must be on the same volume. The following file is not on the same volume as previous source files:\n%s\n", currentSourceFilename->source);  
+
+            bail(SDEXIT_SOURCE_FILES_ON_DIFFERENT_VOLUMES);
+        }
         result = backupComponents->AddToSnapshotSet(currentSourceDrive->source, GUID_NULL, snapshotId);
         genericFailCheck("AddToSnapshotSet", result);
         currentSourceDrive = currentSourceDrive->next;
-    } while (currentSourceDrive != nullptr);
+        currentSourceFilename = currentSourceFilename->next;
+    } while (currentSourceDrive != nullptr && currentSourceFilename != nullptr);
   
 
     // notify writers of impending backup
@@ -511,6 +561,7 @@ int wmain(int argc, WCHAR** argv)
 
     OutputDebugString(snapshotProp.m_pwszSnapshotDeviceObject);
 
+
     // remove the device specification (C:\) from each source file, so that it concats properly into the VSS device object specification
     currentSourceFilename = sourceFilenames; // point to the beginnings of the list
     currentSourceDrive = sourceDrives;
@@ -519,11 +570,13 @@ int wmain(int argc, WCHAR** argv)
         if (sourceFilenamesWithoutDrives == nullptr) {
             sourceFilenamesWithoutDrives = (t_sourceList *)malloc(sizeof(t_sourceList));
             assert(sourceFilenamesWithoutDrives != nullptr);
+            ZeroMemory(sourceFilenamesWithoutDrives, sizeof(t_sourceList));
             currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
         }
         else {
             currentSourceFilenameWithoutDrive = (t_sourceList*)malloc(sizeof(t_sourceList));
             assert(currentSourceFilenameWithoutDrive != nullptr);
+            ZeroMemory(currentSourceFilenameWithoutDrive, sizeof(t_sourceList));
         }
 
         currentSourceFilenameWithoutDrive->source = (LPWSTR)malloc(wcslen(currentSourceFilename->source) * sizeof(WCHAR));
@@ -546,37 +599,56 @@ int wmain(int argc, WCHAR** argv)
         currentSourceFilename = currentSourceFilename->next;
     } while (currentSourceDrive != nullptr && currentSourceFilename != nullptr);
     
-    
-    WCHAR sourcePathFile[MAX_PATH]{};
-    WCHAR destinationPathFile[MAX_PATH]{};
-
-    // calculate file paths
-    WCHAR sourcePathWithDeviceObject[MAX_PATH] = L"";
-    WCHAR directorySpec[3] = L"";
-    if (!selectedFilesMode) {
-        StringCbPrintf(directorySpec, (3 * sizeof(WCHAR)) /* turns out this in bytes */, L"\\*");
-    }
-
-    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH * sizeof(WCHAR), L"%s\\%s%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive, directorySpec);
-
+  
     if (selectedFilesMode)
     {
-        // build source and dest path
-        StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive);
-        StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s", destDirectory);
+        currentSourceFilename = sourceFilenames; // point to the beginnings of the lists
+        currentSourceDrive = sourceDrives;
+        currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
 
-        copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
-        if (copyError) {
-            bail(copyError);
-        }
+        // expect the lists to not be empty
+        assert(currentSourceDrive != nullptr && currentSourceFilename != nullptr && currentSourceFilenameWithoutDrive != nullptr);
+
+        // loop over each source drive/filename/filename without drive triplet and copy
+        do {
+            WCHAR sourcePathFile[MAX_PATH]{};
+            WCHAR destinationPathFile[MAX_PATH]{};
+
+            // build source and dest path
+            StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, currentSourceFilenameWithoutDrive->source);
+            StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s", destDirectory);
+
+            copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
+            if (copyError) {
+                bail(copyError);
+            }
+
+            // loop to next items
+            currentSourceDrive = currentSourceDrive->next;
+            currentSourceFilename = currentSourceFilename->next;
+            currentSourceFilenameWithoutDrive = currentSourceFilenameWithoutDrive->next;
+        } while (currentSourceDrive != nullptr && currentSourceFilename != nullptr && currentSourceFilenameWithoutDrive != nullptr);
     }
     else
     {
         // multi-file mode
+
+        WCHAR sourcePathFile[MAX_PATH]{};
+        WCHAR destinationPathFile[MAX_PATH]{};
+        currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
+        assert(currentSourceFilenameWithoutDrive != nullptr);
+
+        // calculate file paths
+        WCHAR sourceShadowPathWithWildcard[MAX_PATH] = L"";
+        WCHAR directorySpec[3] = L"";
+        StringCbPrintf(directorySpec, (3 * sizeof(WCHAR)) /* turns out this in bytes */, L"\\*"); // this adds the "*" wildcard to copy all items
+
+        StringCbPrintf(sourceShadowPathWithWildcard, MAX_PATH * sizeof(WCHAR), L"%s\\%s%s", snapshotProp.m_pwszSnapshotDeviceObject, currentSourceFilenameWithoutDrive->source, directorySpec);
+
          
         // find files in directory
         HANDLE findHandle = INVALID_HANDLE_VALUE;
-        findHandle = FindFirstFile(sourcePathWithDeviceObject, &findData);
+        findHandle = FindFirstFile(sourceShadowPathWithWildcard, &findData);
 
         if (findHandle == INVALID_HANDLE_VALUE) {
             printf("Unable to find the first file in the source.\n");
@@ -597,7 +669,7 @@ int wmain(int argc, WCHAR** argv)
             }
 
             // build source and destination path for files
-            StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive, findData.cFileName);
+            StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, currentSourceFilenameWithoutDrive->source, findData.cFileName);
             StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", destDirectory, findData.cFileName);
 
             copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
@@ -741,32 +813,63 @@ void genericFailCheck(const char* operationName, HRESULT result) {
 }
 
 /// <summary>
+/// Free all source filename and drive structures.
+/// </summary>
+/// <param name=""></param>
+void FreeSourceStructures(void) {
+    t_sourceList* tempNextItem;
+
+    currentSourceDrive = sourceDrives;
+    currentSourceFilename = sourceFilenames;
+    currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
+
+    while (currentSourceDrive != nullptr) {
+        tempNextItem = currentSourceDrive->next;
+        free(currentSourceDrive->source);
+        currentSourceDrive->source = nullptr;
+        free(currentSourceDrive);
+        currentSourceDrive = tempNextItem;
+    }
+
+    while (currentSourceFilename != nullptr) {
+        tempNextItem = currentSourceFilename->next;
+        free(currentSourceFilename->source);
+        currentSourceFilename->source = nullptr;
+        free(currentSourceFilename);
+        currentSourceFilename = tempNextItem;
+    }
+    while (currentSourceFilenameWithoutDrive != nullptr) {
+        tempNextItem = currentSourceFilenameWithoutDrive->next;
+        free(currentSourceFilenameWithoutDrive->source);
+        currentSourceFilenameWithoutDrive->source = nullptr;
+        free(currentSourceFilenameWithoutDrive);
+        currentSourceFilenameWithoutDrive = tempNextItem;
+    }
+
+    sourceDrives = nullptr;
+    sourceFilenames = nullptr;
+    sourceFilenamesWithoutDrives = nullptr;
+    currentSourceDrive = nullptr;
+    currentSourceFilename = nullptr;
+    currentSourceFilenameWithoutDrive = nullptr;
+    previousSourceDrive = nullptr;
+    previousSourceFilename = nullptr;
+    previousSourceFilenameWithoutDrive = nullptr;
+}
+
+/// <summary>
 /// Tidy up any objects and uninitialize before an exit.
 /// </summary>
 /// <param name="exitCode">The exit code to provide to the OS.</param>
 void bail(HRESULT exitCode) {
-    if (sourceDirectoryOrFile != nullptr) {
-        free(sourceDirectoryOrFile);
-        sourceDirectoryOrFile = nullptr;
-    }
-
+    FreeSourceStructures();
     if (destDirectory != nullptr) {
         free(destDirectory);
         destDirectory = nullptr;
     }
-    if (sourceDirectoryOrFileWithoutDrive != nullptr) {
-        free(sourceDirectoryOrFileWithoutDrive);
-        sourceDirectoryOrFileWithoutDrive = nullptr;
-    }
-
     if (canonicalINIPath != nullptr) {
         free(canonicalINIPath);
         canonicalINIPath = nullptr;
-    }
-
-    if (sourceDrive != nullptr) {
-        free(sourceDrive);
-        sourceDrive = nullptr;
     }
 
     if (snapshotSetId != nullptr) {
