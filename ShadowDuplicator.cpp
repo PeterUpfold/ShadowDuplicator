@@ -70,6 +70,13 @@ LPWSTR canonicalINIPath = nullptr;
 BOOL comInitialized = FALSE;
 
 /// <summary>
+/// If we fail after backup start but before completion, we will call AbortBackup.
+/// If the backup completes, we set this to FALSE so that we will not call AbortBackup.
+/// This starts false as we have not yet started a backup.
+/// </summary>
+BOOL shouldAbortBackupOnBail = FALSE;
+
+/// <summary>
 /// Keep global state for a visible spinner to show progress.
 /// </summary>
 int progressMarker = 0;
@@ -405,7 +412,7 @@ int wmain(int argc, WCHAR** argv)
     
 
     if (!quiet) {
-        printf("Waiting for VSS writers to be ready...\n");
+        printf("Waiting for VSS writers to provide metadata...\n");
     }
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
         Sleep(SHORT_SLEEP);
@@ -444,6 +451,9 @@ int wmain(int argc, WCHAR** argv)
 
     result = backupComponents->StartSnapshotSet(snapshotSetId);
     genericFailCheck("StartSnapshotSet", result);
+
+    // from StartSnapshotSet until backup completion, if we fail, we must call AbortBackup inside bail
+    shouldAbortBackupOnBail = TRUE;
 
     snapshotId = (VSS_ID*)malloc(sizeof(VSS_ID));
     assert(snapshotId != nullptr);
@@ -613,10 +623,23 @@ int wmain(int argc, WCHAR** argv)
         do {
             WCHAR sourcePathFile[MAX_PATH]{};
             WCHAR destinationPathFile[MAX_PATH]{};
+            WCHAR baseNameAndExt[MAX_PATH]{};
 
             // build source and dest path
             StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, currentSourceFilenameWithoutDrive->source);
-            StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s", destDirectory);
+
+
+            // get basename&ext of source file to make its final destination path from dir + basename
+            WCHAR* lastBackslash = wcsrchr(sourcePathFile, L'\\');
+            wcsncpy_s(
+                baseNameAndExt,
+                MAX_PATH * sizeof(WCHAR),
+                lastBackslash,
+                wcslen(sourcePathFile)
+            );
+
+
+            StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s\%s", destDirectory, baseNameAndExt);
 
             copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
             if (copyError) {
@@ -696,6 +719,8 @@ int wmain(int argc, WCHAR** argv)
     asyncResult = E_FAIL;
     result = backupComponents->BackupComplete(&vssAsync);
     genericFailCheck("BackupComplete", result);
+
+    shouldAbortBackupOnBail = FALSE;
 
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
         Sleep(SHORT_SLEEP);
@@ -886,8 +911,16 @@ void bail(HRESULT exitCode) {
         vssAsync->Release();
         vssAsync = nullptr;
     }
+    
 
     if (backupComponents != nullptr) {
+        if (shouldAbortBackupOnBail) {
+            HRESULT abortResult = backupComponents->AbortBackup();
+            if (abortResult != S_OK) {
+                wprintf(L"Failed to abort the backup with error 0x%x\n", abortResult);
+            }
+        }
+
         // free writer metadata
         backupComponents->FreeWriterMetadata();
 
