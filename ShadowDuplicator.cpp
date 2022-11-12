@@ -23,7 +23,7 @@ is no warranty.
 
 #define assert(expression) if (!(expression)) { printf("assert on %d", __LINE__); bail(250); }
 
-#define SDVERSION L"v0.5-wide"
+#define SDVERSION L"v0.5"
 
 // A linked list of source drives or source paths
 typedef struct sourceList {
@@ -140,6 +140,7 @@ t_sourceList* previousSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
 #define SDEXIT_NO_FIRST_FILE_IN_SOURCE 2 | 0x20000000
 #define SDEXIT_NO_SOURCE_SPECIFIED 3 | 0x20000000
 #define SDEXIT_SOURCE_FILES_ON_DIFFERENT_VOLUMES 4 | 0x20000000
+#define SDEXIT_INVALID_ARGS 5 | 0x20000000
 
 
 /// <summary>
@@ -169,7 +170,7 @@ int wmain(int argc, WCHAR** argv)
     // loop over command line options -- _very_ simple parsing
     if (argc < 2) {
         usage();
-        exit(0);
+        exit(SDEXIT_INVALID_ARGS);
     }
 
 
@@ -189,7 +190,7 @@ int wmain(int argc, WCHAR** argv)
                 usage();
                 exit(0);
             }
-            if (wcscmp(argv[i], L"--singlefile") == 0 || wcscmp(argv[i], L"-s") == 0) {
+            if (wcscmp(argv[i], L"--singlefile") == 0 || wcscmp(argv[i], L"-s") == 0 || wcscmp(argv[i], L"--selected") == 0) {
                 selectedFilesMode = TRUE;
             }
             ++lastSwitchArgument;
@@ -1051,28 +1052,42 @@ void usage(void) {
     wprintf(SDVERSION);
     printf("\n\n");
     printf("Usage: ShadowDuplicator.exe [OPTIONS] INI-FILE\n");
-    printf(" or single file mode:\n");
-    printf("Usage: ShadowDuplicator.exe -s [SOURCE] [DEST_DIRECTORY_AND_FILENAME]\n");
+    printf(" or selected files mode:\n");
+    printf("Usage: ShadowDuplicator.exe -s SOURCE [SOURCE2 [SOURCE3] ...] DEST_DIRECTORY\n");
     printf("\n");
-    printf("Multi File Example:  ShadowDuplicator.exe -q BackupConfig.ini\n");
-    printf("Single File Example: ShadowDuplicator.exe -q -s SourceFile.txt D:\\DestDirectory\\DestFile.txt\n");
+    printf("Whole Folder Mode Example:  ShadowDuplicator.exe -q BackupConfig.ini\n");
+    printf("Selected Files Example: ShadowDuplicator.exe -q -s SourceFile.txt SourceFile2.txt D:\\DestDirectory\n");
     printf("\n");
     printf("\n");
     printf("\n");
     printf("Options:\n");
     printf("-h, --help, -?, /?, --usage     Print this help message\n");
     printf("-q                              Silence the banner and any progress messages\n");
-    printf("-s, --singlefile                Single file mode -- copy one source file to the destination directory only\n");
+    printf("-s, --selected                  Selected files mode -- copy source files to the destination directory (the last command line argument)\n");
     printf("\n");
-    printf("The path to the INI file must not begin with '-'.\n");
+    printf("The path to the INI file or any source file must not begin with '-'.\n");
     printf("The INI file should be as follows:\n\n");
     printf("[FileSet]\nSource = C:\\Users\\Public\\Documents\nDestination = D:\\test\n");
     printf("Do not include trailing slashes in paths.\n");
     printf("\n");
-    printf("In single-file mode, you must provide the full destination path, including destination file name in the\n");
-    printf("directory.\n");
+    printf("In selected-files mode, you must provide the destination directory path only.\n");
     printf("\n");
-    printf("WARNING: Copies will always overwrite items in the destination.\n");
+    printf("WARNING: Copies will always overwrite items in the destination without confirmation.\n");
+    printf("\n");
+    printf("Exit codes:\n");
+    printf("If a Win32 error is raised (i.e. an error copying files), this will be the exit code.\n");
+    printf("https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-\n");
+    printf("\n");
+    printf("Exit code will be 0 if all copy operations succeeded and the backup can be considered\n");
+    printf("a success.\n");
+    printf("\n");
+    printf("Custom exit codes:\n");
+    printf("0x20000001 | 536870913 | No destination directory specified on command line.\n");
+    printf("0x20000002 | 536870914 | Could not find any files in the source directory.\n");
+    printf("0x20000003 | 536870915 | No source file or directory specified on command line.\n");
+    printf("0x20000004 | 536870916 | All source files must be on the same volume. This error\n");
+    printf("           |           | is returned if this constraint is violated.\n");
+    printf("0x20000005 | 536870917 | The command line arguments were not understood.\n");
 }
 
 /// <summary>
