@@ -1,7 +1,7 @@
 /* ShadowDuplicator -- a simple VC++ Volume Shadow Copy requestor for backing up
 locked files
 
-Copyright (C) 2021 Peter Upfold.
+Copyright (C) 2021-2022 Peter Upfold.
 
 Licensed under the Apache 2.0 Licence. See the LICENSE file in the project root for details.
 
@@ -23,6 +23,14 @@ is no warranty.
 
 #define assert(expression) if (!(expression)) { printf("assert on %d", __LINE__); bail(250); }
 
+#define SDVERSION L"v0.5"
+
+// A linked list of source drives or source paths
+typedef struct sourceList {
+    LPWSTR source;
+    struct sourceList *next;
+} t_sourceList;
+
 /// <summary>
 /// The backup components VSS object.
 /// </summary>
@@ -43,47 +51,30 @@ VSS_ID* snapshotSetId = nullptr;
 /// </summary>
 VSS_ID* snapshotId = nullptr;
 
-/// <summary>
-/// The source directory to back up.
-/// </summary>
-LPSTR sourceDirectoryOrFile = nullptr;
 
 /// <summary>
 /// The destination directory where backed up files should be copied.
 /// </summary>
-LPSTR destDirectory = nullptr;
-
-/// <summary>
-/// Wide string version of source directory to back up.
-/// </summary>
-LPWSTR sourceDirectoryOrFileWide = nullptr;
-
-/// <summary>
-/// The source directory without the drive specifier.
-/// </summary>
-LPWSTR sourceDirectoryOrFileWithoutDrive = nullptr;
-
-/// <summary>
-/// Wide string version of destination directory.
-/// </summary>
-LPWSTR destDirectoryWide = nullptr;
-
-/// <summary>
-/// The source drive of which to make a shadow copy.
-/// </summary>
-LPSTR sourceDrive = nullptr;
+LPWSTR destDirectory = nullptr;
 
 /// <summary>
 /// The canonical, fully qualified path to the INI file which provides
 /// options for this execution run.
 /// </summary>
-LPSTR canonicalINIPath = nullptr;
+LPWSTR canonicalINIPath = nullptr;
 
 /// <summary>
 /// Is COM initialized? For only calling CoUninitialize() in bail() if we 
 /// have initialized it.
 /// </summary>
 BOOL comInitialized = FALSE;
+
+/// <summary>
+/// If we fail after backup start but before completion, we will call AbortBackup.
+/// If the backup completes, we set this to FALSE so that we will not call AbortBackup.
+/// This starts false as we have not yet started a backup.
+/// </summary>
+BOOL shouldAbortBackupOnBail = FALSE;
 
 /// <summary>
 /// Keep global state for a visible spinner to show progress.
@@ -95,6 +86,52 @@ int progressMarker = 0;
 /// </summary>
 BOOL quiet = FALSE;
 
+/// <summary>
+/// Head of source drive specifications (C:\, D:\) for each source file. Linked list structure.
+/// </summary>
+t_sourceList* sourceDrives = nullptr;
+
+/// <summary>
+/// Head of source filenames in the linked list structure.
+/// </summary>
+t_sourceList* sourceFilenames = nullptr;
+
+/// <summary>
+/// Pointer to the current drive we are dealing with.
+/// </summary>
+t_sourceList* currentSourceDrive = sourceDrives;
+
+/// <summary>
+/// Pointer to the current filename we are dealing with.
+/// </summary>
+t_sourceList* currentSourceFilename = sourceFilenames;
+
+/// <summary>
+/// The previous pointer to the drive we were working with. This is so we can update the next pointer.
+/// </summary>
+t_sourceList* previousSourceDrive = sourceDrives;
+
+/// <summary>
+/// The previous pointer to the filename we were working with.
+/// </summary>
+t_sourceList* previousSourceFilename = sourceFilenames;
+
+/// <summary>
+/// Head of list of source filenames with the source drive specification sliced off.
+/// </summary>
+t_sourceList* sourceFilenamesWithoutDrives = nullptr;
+
+/// <summary>
+/// Current pointer of where we are in the source filenames with the source drive specification sliced off.
+/// </summary>
+t_sourceList* currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
+
+/// <summary>
+/// The previous pointer to the source filenames with the source drive specification sliced off.
+/// </summary>
+t_sourceList* previousSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
+
+
 #define SHORT_SLEEP 500
 #define LONG_SLEEP 1500
 
@@ -102,6 +139,8 @@ BOOL quiet = FALSE;
 #define SDEXIT_NO_DEST_DIR_SPECIFIED 1 | 0x20000000 // customer bit in HRESULT
 #define SDEXIT_NO_FIRST_FILE_IN_SOURCE 2 | 0x20000000
 #define SDEXIT_NO_SOURCE_SPECIFIED 3 | 0x20000000
+#define SDEXIT_SOURCE_FILES_ON_DIFFERENT_VOLUMES 4 | 0x20000000
+#define SDEXIT_INVALID_ARGS 5 | 0x20000000
 
 
 /// <summary>
@@ -110,7 +149,7 @@ BOOL quiet = FALSE;
 /// <param name="argc"></param>
 /// <param name="argv"></param>
 /// <returns></returns>
-int main(int argc, char** argv)
+int wmain(int argc, WCHAR** argv)
 {
     HRESULT result = E_FAIL;
     HRESULT asyncResult = E_FAIL;
@@ -119,36 +158,40 @@ int main(int argc, char** argv)
     DWORD fileAttributes = INVALID_FILE_ATTRIBUTES;
     DWORD error = 0;
     DWORD copyError = 0;
-    BOOL singleFileMode = FALSE;
+    BOOL selectedFilesMode = FALSE;
 
     WIN32_FIND_DATA findData{};
 
     int lastSwitchArgument = 1; // the index of the last command line arg that was a switch
     BOOL switchArgumentsComplete = FALSE;
 
+
+
     // loop over command line options -- _very_ simple parsing
     if (argc < 2) {
         usage();
-        exit(0);
+        exit(SDEXIT_INVALID_ARGS);
     }
+
+
     for (int i = 1; i < argc; i++) {
 
-        if (strcmp(argv[i], "/?") == 0) {
+        if (wcscmp(argv[i], L"/?") == 0) {
             usage();
             exit(0);
         }
         // handle switches
-        if (argv[i][0] == '-') {
+        if (argv[i][0] == L'-') {
             //TODO: check if use of strcmp is safe here -- can we assume arguments are null terminated correctly?
-            if (strcmp(argv[i], "-q") == 0) {
+            if (wcscmp(argv[i], L"-q") == 0) {
                 quiet = TRUE;
             }
-            if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "--usage") == 0) {
+            if (wcscmp(argv[i], L"-h") == 0 || wcscmp(argv[i], L"--help") == 0 || wcscmp(argv[i], L"-?") == 0 || wcscmp(argv[i], L"--usage") == 0) {
                 usage();
                 exit(0);
             }
-            if (strcmp(argv[i], "--singlefile") == 0 || strcmp(argv[i], "-s") == 0) {
-                singleFileMode = TRUE;
+            if (wcscmp(argv[i], L"--singlefile") == 0 || wcscmp(argv[i], L"-s") == 0 || wcscmp(argv[i], L"--selected") == 0) {
+                selectedFilesMode = TRUE;
             }
             ++lastSwitchArgument;
         }
@@ -159,40 +202,65 @@ int main(int argc, char** argv)
                 switchArgumentsComplete = TRUE;
             }
 
-            if (singleFileMode) { // get source and dest path
+            if (selectedFilesMode) { // get source and dest path
                 
-                // allocate space for source and destination paths
-                if (sourceDirectoryOrFile == nullptr) {
-                    sourceDirectoryOrFile = (LPSTR)malloc(MAX_PATH);
-                }
+                // allocate space for destination path
                 if (destDirectory == nullptr) {
-                    destDirectory = (LPSTR)malloc(MAX_PATH);
+                    destDirectory = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
                 }
                 
-                assert(sourceDirectoryOrFile != nullptr);
                 assert(destDirectory != nullptr);
 
-                // usage: ShadowDuplicator -s [source] [dest]
-                if (i == lastSwitchArgument + 1) {
-                    StringCbPrintfA(sourceDirectoryOrFile, MAX_PATH, "%s", argv[i]);
+                // usage: ShadowDuplicator -s [source] [source] [source] [dest]
+                if (i != (argc - 1)) {
+                    // allocate a new source directory and filename
+                    currentSourceDrive = (t_sourceList*)malloc(sizeof(t_sourceList));
+                    assert(currentSourceDrive != nullptr);
+                    ZeroMemory(currentSourceDrive, sizeof(t_sourceList));
+                    if (sourceDrives == nullptr) { // if the head of the list is not yet set, set it
+                        sourceDrives = currentSourceDrive;
+                    }
+
+                    currentSourceFilename = (t_sourceList*)malloc(sizeof(t_sourceList));
+                    assert(currentSourceFilename != nullptr);
+                    ZeroMemory(currentSourceFilename, sizeof(t_sourceList));
+                    if (sourceFilenames == nullptr) { // if the head of the list is not yet set, set it
+                        sourceFilenames = currentSourceFilename;
+                    }
 
                     // get source drive from source directory
-                    sourceDrive = (LPSTR)malloc(MAX_PATH);
-                    assert(sourceDrive != nullptr);
+                    currentSourceDrive->source = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
+                    assert(currentSourceDrive->source != nullptr);
 
-                    if (!GetVolumePathNameA(sourceDirectoryOrFile, sourceDrive, MAX_PATH)) {
+                    if (!GetVolumePathNameW(argv[i], currentSourceDrive->source, MAX_PATH)) {
                         error = GetLastError();
                         if (error) {
                             friendlyError(L"Failed to get Source Drive from Source Directory", error);
                         }
                     }
+
+                    // copy filename into filename buffer
+                    currentSourceFilename->source = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
+                    assert(currentSourceFilename->source != nullptr);
+                    StringCbPrintf(currentSourceFilename->source, MAX_PATH * sizeof(WCHAR), argv[i]);
+
+                    // now set the previous item's pointer to point to these items
+                    if (previousSourceDrive != nullptr) {
+                        previousSourceDrive->next = currentSourceDrive;
+                    }
+                    if (previousSourceFilename != nullptr) {
+                        previousSourceFilename->next = currentSourceFilename;
+                    }
+                    previousSourceDrive = currentSourceDrive;
+                    previousSourceFilename = currentSourceFilename;
+
                 }
-                if (i == lastSwitchArgument + 2) {
-                    StringCbPrintfA(destDirectory, MAX_PATH, "%s", argv[i]);
+                else { // last argument is dest
+                    StringCbPrintfW(destDirectory, MAX_PATH, L"%s", argv[i]);
                 }
             }
-            else { // multi-file mode -- check INI file
-                fileAttributes = GetFileAttributesA(argv[i]);
+            else { // directory mode -- check INI file
+                fileAttributes = GetFileAttributesW(argv[i]);
 
                 if (fileAttributes == INVALID_FILE_ATTRIBUTES) {
                     error = GetLastError();
@@ -200,28 +268,43 @@ int main(int argc, char** argv)
                     exit(error);
                 }
 
-                canonicalINIPath = (LPSTR)malloc(MAX_PATH);
+                canonicalINIPath = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
 
                 // canonicalise path
-                if (!(GetFullPathNameA(argv[i], MAX_PATH, canonicalINIPath, NULL))) {
+                if (!(GetFullPathNameW(argv[i], MAX_PATH, canonicalINIPath, NULL))) {
                     error = GetLastError();
                     friendlyError(L"Failed to get full path name of specified INI file", error);
                     exit(error);
                 }
 
                 // allocate space for source and destination paths
-                sourceDirectoryOrFile = (LPSTR)malloc(MAX_PATH);
-                destDirectory = (LPSTR)malloc(MAX_PATH);
+                destDirectory = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
 
-                assert(sourceDirectoryOrFile != nullptr);
                 assert(destDirectory != nullptr);
+
+                // allocate source 
+                currentSourceDrive = (t_sourceList*)malloc(sizeof(t_sourceList));
+                assert(currentSourceDrive != nullptr);
+                ZeroMemory(currentSourceDrive, sizeof(t_sourceList));
+                if (sourceDrives == nullptr) { // if the head of the list is not yet set, set it
+                    sourceDrives = currentSourceDrive;
+                }
+
+                currentSourceFilename = (t_sourceList*)malloc(sizeof(t_sourceList));
+                assert(currentSourceFilename != nullptr);
+                ZeroMemory(currentSourceFilename, sizeof(t_sourceList));
+                if (sourceFilenames == nullptr) { // if the head of the list is not yet set, set it
+                    sourceFilenames = currentSourceFilename;
+                }
             
                 // get source from INI
-                GetPrivateProfileStringA(
-                    "FileSet",
-                    "Source",
-                    "",
-                    sourceDirectoryOrFile,
+                currentSourceFilename->source = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
+                assert(currentSourceFilename->source != nullptr);
+                GetPrivateProfileStringW(
+                    L"FileSet",
+                    L"Source",
+                    L"",
+                    currentSourceFilename->source,
                     MAX_PATH,
                     canonicalINIPath
                 );
@@ -233,10 +316,10 @@ int main(int argc, char** argv)
                 }
 
                 // get dest from INI
-                GetPrivateProfileStringA(
-                    "FileSet",
-                    "Destination",
-                    "",
+                GetPrivateProfileStringW(
+                    L"FileSet",
+                    L"Destination",
+                    L"",
                     destDirectory,
                     MAX_PATH,
                     canonicalINIPath
@@ -249,10 +332,10 @@ int main(int argc, char** argv)
 
 
                 // get source drive from source directory
-                sourceDrive = (LPSTR)malloc(MAX_PATH);
-                assert(sourceDrive != nullptr);
+                currentSourceDrive->source = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
+                assert(currentSourceDrive->source != nullptr);
 
-                if (!GetVolumePathNameA(sourceDirectoryOrFile, sourceDrive, MAX_PATH)) {
+                if (!GetVolumePathNameW(argv[i], currentSourceDrive->source, MAX_PATH)) {
                     error = GetLastError();
                     if (error) {
                         friendlyError(L"Failed to get Source Drive from Source Directory", error);
@@ -261,33 +344,40 @@ int main(int argc, char** argv)
             }
         }
     }
-   
 
     if (!quiet) {
         banner();
     }
 
     // check the dest directory existence before we bother to set up VSS
-    if (sourceDirectoryOrFile == nullptr) {
-        printf("No source directory was specified.\n"); // friendlyError is not appropriate as this looks up Win32 error codes
+    if (sourceFilenames == nullptr) {
+        printf("No source files were specified.\n"); // friendlyError is not appropriate as this looks up Win32 error codes
+        bail(SDEXIT_NO_SOURCE_SPECIFIED);
+    }
+    if (sourceDrives == nullptr) {
+        printf("No source drives were specified.\n"); // friendlyError is not appropriate as this looks up Win32 error codes
         bail(SDEXIT_NO_SOURCE_SPECIFIED);
     }
     if (destDirectory == nullptr) {
         printf("No destination directory was specified.\n"); // friendlyError is not appropriate as this looks up Win32 error codes
         bail(SDEXIT_NO_DEST_DIR_SPECIFIED);
     }
-    if (!singleFileMode && !PathFileExistsA(destDirectory)) { //TODO: can we add to this checking dest dir in single file mode?
+    if (!selectedFilesMode && !PathFileExistsW(destDirectory)) { //TODO: can we add to this checking dest dir in selected file mode?
         error = GetLastError();
         if (error) {
             friendlyError(L"The destination directory does not seem to exist.", error); //friendlyError will bail
         }
     }
-    if (!PathFileExistsA(sourceDirectoryOrFile)) {
-        error = GetLastError();
-        if (error) {
-            friendlyError(L"The source file does not seem to exist.", error); //friendlyError will bail
+
+    currentSourceFilename = sourceFilenames;
+    do {
+        assert(currentSourceFilename->source != nullptr);
+        if (!PathFileExistsW(currentSourceFilename->source)) {
+            wprintf(L"The source file \"%s\" does not seem to exist. 0x%x\n", currentSourceFilename->source, GetLastError());
+            bail(GetLastError());
         }
-    }
+        currentSourceFilename = currentSourceFilename->next;
+    } while (currentSourceFilename != nullptr);
 
     // initialize COM (must do before InitializeForBackup works)
     result = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
@@ -320,8 +410,11 @@ int main(int argc, char** argv)
     assert(vssAsync != nullptr);
     
 
+    if (!quiet) {
+        printf("Waiting for VSS writers to provide metadata...\n");
+    }
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
-        Sleep(500);
+        Sleep(SHORT_SLEEP);
         result = vssAsync->QueryStatus(&asyncResult, NULL);
         if (result != S_OK) {
             printf("Unable to query vss async status -- %x\n", result);
@@ -330,6 +423,9 @@ int main(int argc, char** argv)
             bail(result);
         }
         OutputDebugString(L"Waiting for async VSS status...");
+        if (!quiet) {
+            spinProgress();
+        }
     }
 
     if (asyncResult == VSS_S_ASYNC_CANCELLED) {
@@ -355,27 +451,51 @@ int main(int argc, char** argv)
     result = backupComponents->StartSnapshotSet(snapshotSetId);
     genericFailCheck("StartSnapshotSet", result);
 
+    // from StartSnapshotSet until backup completion, if we fail, we must call AbortBackup inside bail
+    shouldAbortBackupOnBail = TRUE;
+
     snapshotId = (VSS_ID*)malloc(sizeof(VSS_ID));
     assert(snapshotId != nullptr);
 
-    // add volume to snapshot set AddToSnapshotSet
-    VSS_PWSZ sourceDriveWide = nullptr;
-    int sourceDriveWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, 0); // get size first
-    sourceDriveWide = (VSS_PWSZ)malloc(sourceDriveWideBufferSize*2); // alloc that size (*2 -- returns number of chars)
-    assert(sourceDriveWide != nullptr);
-    // re-run to actually get chars into buffer
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, sourceDriveWideBufferSize);
-    
-    result = backupComponents->AddToSnapshotSet(sourceDriveWide, GUID_NULL, snapshotId);
-    free(sourceDriveWide);
-    sourceDriveWide = nullptr;
-    genericFailCheck("AddToSnapshotSet", result);
+    // add volumes to snapshot set AddToSnapshotSet -- we will only add the first drive spec -- all source files must be on the same volume
+    currentSourceDrive = sourceDrives;
+    currentSourceFilename = sourceFilenames;
+    WCHAR volumeAddedToSnapshot[4]{};
+    do {
+        assert(currentSourceDrive->source != nullptr);
+
+        if (wcslen(volumeAddedToSnapshot) < 1) {
+            // this is the volume we will add to the snapshot -- make a note
+            StringCbPrintfW(volumeAddedToSnapshot, 4 * sizeof(WCHAR), L"%s", currentSourceDrive->source);
+        }
+        else if (wcscmp(volumeAddedToSnapshot, currentSourceDrive->source) == 0) {
+            // on the same volume, skip
+            currentSourceDrive = currentSourceDrive->next;
+            currentSourceFilename = currentSourceFilename->next;
+            continue;
+        }
+        else {
+            // it is not the same volume, bail
+            backupComponents->AbortBackup();
+            wprintf(L"All source files must be on the same volume. The following file is not on the same volume as previous source files:\n%s\n", currentSourceFilename->source);  
+
+            bail(SDEXIT_SOURCE_FILES_ON_DIFFERENT_VOLUMES);
+        }
+        result = backupComponents->AddToSnapshotSet(currentSourceDrive->source, GUID_NULL, snapshotId);
+        genericFailCheck("AddToSnapshotSet", result);
+        currentSourceDrive = currentSourceDrive->next;
+        currentSourceFilename = currentSourceFilename->next;
+    } while (currentSourceDrive != nullptr && currentSourceFilename != nullptr);
+  
 
     // notify writers of impending backup
     result = backupComponents->PrepareForBackup(&vssAsync);
     genericFailCheck("PrepareForBackup", result);
     assert(vssAsync != nullptr);
 
+    if (!quiet) {
+        printf("Waiting for VSS writers to be ready for impending backup...\n");
+    }
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
         Sleep(SHORT_SLEEP);
         result = vssAsync->QueryStatus(&asyncResult, NULL);
@@ -450,64 +570,107 @@ int main(int argc, char** argv)
 
     OutputDebugString(snapshotProp.m_pwszSnapshotDeviceObject);
 
-    // make wide versions of source and dest
-    int sourceDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectoryOrFile, -1, sourceDirectoryOrFileWide, 0);
-    sourceDirectoryOrFileWide = (LPWSTR)malloc(sourceDirectoryWideBufferSize * 2);
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDirectoryOrFile, -1, sourceDirectoryOrFileWide, sourceDirectoryWideBufferSize);
-    int destDirectoryWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destDirectory, -1, destDirectoryWide, 0);
-    destDirectoryWide = (LPWSTR)malloc(destDirectoryWideBufferSize * 2);
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destDirectory, -1, destDirectoryWide, destDirectoryWideBufferSize);
 
-    // remove the device specification (C:\) from sourceDirectoryOrFileWide, so that it concats properly into the VSS device object specification
-
-    sourceDriveWideBufferSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, 0); // get size first
-    sourceDriveWide = (VSS_PWSZ)malloc(sourceDriveWideBufferSize * 2); // alloc that size (*2 -- returns number of chars)
-    assert(sourceDriveWide != nullptr);
-    // re-run to actually get chars into buffer
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sourceDrive, -1, sourceDriveWide, sourceDriveWideBufferSize);
-
-    sourceDirectoryOrFileWithoutDrive = (LPWSTR)malloc(wcslen(sourceDirectoryOrFileWide) * 2);
-    assert(sourceDirectoryOrFileWithoutDrive != nullptr);
-    // pull into  new string starting at sourceDriveWide position
-    wcsncpy_s(sourceDirectoryOrFileWithoutDrive,
-        wcslen(sourceDirectoryOrFileWide),
-        &sourceDirectoryOrFileWide[wcslen(sourceDriveWide)],
-        wcslen(sourceDirectoryOrFileWide) - wcslen(sourceDriveWide)
-    );
-
-    free(sourceDriveWide);
-    sourceDriveWide = nullptr;
-    
-    WCHAR sourcePathFile[MAX_PATH]{};
-    WCHAR destinationPathFile[MAX_PATH]{};
-
-    // calculate file paths
-    WCHAR sourcePathWithDeviceObject[MAX_PATH] = L"";
-    WCHAR directorySpec[3] = L"";
-    if (!singleFileMode) {
-        StringCbPrintf(directorySpec, (3 * sizeof(WCHAR)) /* turns out this in bytes */, L"\\*");
-    }
-
-    StringCbPrintf(sourcePathWithDeviceObject, MAX_PATH * sizeof(WCHAR), L"%s\\%s%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive, directorySpec);
-
-    if (singleFileMode)
-    {
-        // build source and dest path
-        StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive);
-        StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s", destDirectoryWide);
-
-        copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
-        if (copyError) {
-            bail(copyError);
+    // remove the device specification (C:\) from each source file, so that it concats properly into the VSS device object specification
+    currentSourceFilename = sourceFilenames; // point to the beginnings of the list
+    currentSourceDrive = sourceDrives;
+    do {
+        // allocate a new sourceWithoutDrive
+        if (sourceFilenamesWithoutDrives == nullptr) {
+            sourceFilenamesWithoutDrives = (t_sourceList *)malloc(sizeof(t_sourceList));
+            assert(sourceFilenamesWithoutDrives != nullptr);
+            ZeroMemory(sourceFilenamesWithoutDrives, sizeof(t_sourceList));
+            currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
         }
+        else {
+            currentSourceFilenameWithoutDrive = (t_sourceList*)malloc(sizeof(t_sourceList));
+            assert(currentSourceFilenameWithoutDrive != nullptr);
+            ZeroMemory(currentSourceFilenameWithoutDrive, sizeof(t_sourceList));
+        }
+
+        currentSourceFilenameWithoutDrive->source = (LPWSTR)malloc(wcslen(currentSourceFilename->source) * sizeof(WCHAR));
+        assert(currentSourceFilenameWithoutDrive->source != nullptr);
+        // pull into new string starting at sourceDrive position in the filename string -- slice off the drive spec
+        wcsncpy_s(currentSourceFilenameWithoutDrive->source,
+            wcslen(currentSourceFilename->source),
+            &currentSourceFilename->source[wcslen(currentSourceDrive->source)],
+            wcslen(currentSourceFilename->source) - wcslen(currentSourceDrive->source)
+        );
+
+        // update tail pointer
+        if (previousSourceFilenameWithoutDrive != nullptr) {
+            previousSourceFilenameWithoutDrive->next = currentSourceFilenameWithoutDrive;
+        }
+        previousSourceFilenameWithoutDrive = currentSourceFilenameWithoutDrive;
+
+        // loop to next item
+        currentSourceDrive = currentSourceDrive->next;
+        currentSourceFilename = currentSourceFilename->next;
+    } while (currentSourceDrive != nullptr && currentSourceFilename != nullptr);
+    
+  
+    if (selectedFilesMode)
+    {
+        currentSourceFilename = sourceFilenames; // point to the beginnings of the lists
+        currentSourceDrive = sourceDrives;
+        currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
+
+        // expect the lists to not be empty
+        assert(currentSourceDrive != nullptr && currentSourceFilename != nullptr && currentSourceFilenameWithoutDrive != nullptr);
+
+        // loop over each source drive/filename/filename without drive triplet and copy
+        do {
+            WCHAR sourcePathFile[MAX_PATH]{};
+            WCHAR destinationPathFile[MAX_PATH]{};
+            WCHAR baseNameAndExt[MAX_PATH]{};
+
+            // build source and dest path
+            StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, currentSourceFilenameWithoutDrive->source);
+
+
+            // get basename&ext of source file to make its final destination path from dir + basename
+            WCHAR* lastBackslash = wcsrchr(sourcePathFile, L'\\');
+            wcsncpy_s(
+                baseNameAndExt,
+                MAX_PATH * sizeof(WCHAR),
+                lastBackslash,
+                wcslen(sourcePathFile)
+            );
+
+
+            StringCbPrintf((WCHAR*)&*(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s\%s", destDirectory, baseNameAndExt);
+
+            copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
+            if (copyError) {
+                bail(copyError);
+            }
+
+            // loop to next items
+            currentSourceDrive = currentSourceDrive->next;
+            currentSourceFilename = currentSourceFilename->next;
+            currentSourceFilenameWithoutDrive = currentSourceFilenameWithoutDrive->next;
+        } while (currentSourceDrive != nullptr && currentSourceFilename != nullptr && currentSourceFilenameWithoutDrive != nullptr);
     }
     else
     {
         // multi-file mode
+
+        WCHAR sourcePathFile[MAX_PATH]{};
+        WCHAR destinationPathFile[MAX_PATH]{};
+        currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
+        assert(currentSourceFilenameWithoutDrive != nullptr);
+
+        // calculate file paths
+        WCHAR sourceShadowPathWithWildcard[MAX_PATH] = L"";
+        WCHAR directorySpec[3] = L"";
+        StringCbPrintf(directorySpec, (3 * sizeof(WCHAR)) /* turns out this in bytes */, L"\\*"); // this adds the "*" wildcard to copy all items
+
+        StringCbPrintf(sourceShadowPathWithWildcard, MAX_PATH * sizeof(WCHAR), L"%s\\%s%s", snapshotProp.m_pwszSnapshotDeviceObject, currentSourceFilenameWithoutDrive->source, directorySpec);
+
          
         // find files in directory
         HANDLE findHandle = INVALID_HANDLE_VALUE;
-        findHandle = FindFirstFile(sourcePathWithDeviceObject, &findData);
+        findHandle = FindFirstFile(sourceShadowPathWithWildcard, &findData);
 
         if (findHandle == INVALID_HANDLE_VALUE) {
             printf("Unable to find the first file in the source.\n");
@@ -528,8 +691,8 @@ int main(int argc, char** argv)
             }
 
             // build source and destination path for files
-            StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, sourceDirectoryOrFileWithoutDrive, findData.cFileName);
-            StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", destDirectoryWide, findData.cFileName);
+            StringCbPrintf((WCHAR*)&(sourcePathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s\\%s", snapshotProp.m_pwszSnapshotDeviceObject, currentSourceFilenameWithoutDrive->source, findData.cFileName);
+            StringCbPrintf((WCHAR*)&(destinationPathFile), MAX_PATH * sizeof(WCHAR), L"%s\\%s", destDirectory, findData.cFileName);
 
             copyError = ShadowCopyFile(sourcePathFile, destinationPathFile);
             if (copyError) {
@@ -555,6 +718,8 @@ int main(int argc, char** argv)
     asyncResult = E_FAIL;
     result = backupComponents->BackupComplete(&vssAsync);
     genericFailCheck("BackupComplete", result);
+
+    shouldAbortBackupOnBail = FALSE;
 
     while (asyncResult != VSS_S_ASYNC_CANCELLED && asyncResult != VSS_S_ASYNC_FINISHED) {
         Sleep(SHORT_SLEEP);
@@ -672,40 +837,63 @@ void genericFailCheck(const char* operationName, HRESULT result) {
 }
 
 /// <summary>
+/// Free all source filename and drive structures.
+/// </summary>
+/// <param name=""></param>
+void FreeSourceStructures(void) {
+    t_sourceList* tempNextItem;
+
+    currentSourceDrive = sourceDrives;
+    currentSourceFilename = sourceFilenames;
+    currentSourceFilenameWithoutDrive = sourceFilenamesWithoutDrives;
+
+    while (currentSourceDrive != nullptr) {
+        tempNextItem = currentSourceDrive->next;
+        free(currentSourceDrive->source);
+        currentSourceDrive->source = nullptr;
+        free(currentSourceDrive);
+        currentSourceDrive = tempNextItem;
+    }
+
+    while (currentSourceFilename != nullptr) {
+        tempNextItem = currentSourceFilename->next;
+        free(currentSourceFilename->source);
+        currentSourceFilename->source = nullptr;
+        free(currentSourceFilename);
+        currentSourceFilename = tempNextItem;
+    }
+    while (currentSourceFilenameWithoutDrive != nullptr) {
+        tempNextItem = currentSourceFilenameWithoutDrive->next;
+        free(currentSourceFilenameWithoutDrive->source);
+        currentSourceFilenameWithoutDrive->source = nullptr;
+        free(currentSourceFilenameWithoutDrive);
+        currentSourceFilenameWithoutDrive = tempNextItem;
+    }
+
+    sourceDrives = nullptr;
+    sourceFilenames = nullptr;
+    sourceFilenamesWithoutDrives = nullptr;
+    currentSourceDrive = nullptr;
+    currentSourceFilename = nullptr;
+    currentSourceFilenameWithoutDrive = nullptr;
+    previousSourceDrive = nullptr;
+    previousSourceFilename = nullptr;
+    previousSourceFilenameWithoutDrive = nullptr;
+}
+
+/// <summary>
 /// Tidy up any objects and uninitialize before an exit.
 /// </summary>
 /// <param name="exitCode">The exit code to provide to the OS.</param>
 void bail(HRESULT exitCode) {
-    if (sourceDirectoryOrFile != nullptr) {
-        free(sourceDirectoryOrFile);
-        sourceDirectoryOrFile = nullptr;
-    }
-
+    FreeSourceStructures();
     if (destDirectory != nullptr) {
         free(destDirectory);
         destDirectory = nullptr;
     }
-    if (sourceDirectoryOrFileWide != nullptr) {
-        free(sourceDirectoryOrFileWide);
-        sourceDirectoryOrFileWide = nullptr;
-    }
-    if (sourceDirectoryOrFileWithoutDrive != nullptr) {
-        free(sourceDirectoryOrFileWithoutDrive);
-        sourceDirectoryOrFileWithoutDrive = nullptr;
-    }
-    if (destDirectoryWide != nullptr) {
-        free(destDirectoryWide);
-        destDirectoryWide = nullptr;
-    }
-
     if (canonicalINIPath != nullptr) {
         free(canonicalINIPath);
         canonicalINIPath = nullptr;
-    }
-
-    if (sourceDrive != nullptr) {
-        free(sourceDrive);
-        sourceDrive = nullptr;
     }
 
     if (snapshotSetId != nullptr) {
@@ -722,8 +910,16 @@ void bail(HRESULT exitCode) {
         vssAsync->Release();
         vssAsync = nullptr;
     }
+    
 
     if (backupComponents != nullptr) {
+        if (shouldAbortBackupOnBail) {
+            HRESULT abortResult = backupComponents->AbortBackup();
+            if (abortResult != S_OK) {
+                wprintf(L"Failed to abort the backup with error 0x%x\n", abortResult);
+            }
+        }
+
         // free writer metadata
         backupComponents->FreeWriterMetadata();
 
@@ -841,6 +1037,8 @@ void banner(void) {
     
     printf("%s\n", banner);
     printf("ShadowDuplicator -- Copyright (C) 2021-2022 Peter Upfold\n");
+    wprintf(SDVERSION);
+    printf("\n\n");
     printf("https://peter.upfold.org.uk/projects/shadowduplicator\n");
     printf("\n");
 }
@@ -850,29 +1048,46 @@ void banner(void) {
 /// </summary>
 /// <param name=""></param>
 void usage(void) {
+    printf("ShadowDuplicator -- Copyright (C) 2021-2022 Peter Upfold\n");
+    wprintf(SDVERSION);
+    printf("\n\n");
     printf("Usage: ShadowDuplicator.exe [OPTIONS] INI-FILE\n");
-    printf(" or single file mode:\n");
-    printf("Usage: ShadowDuplicator.exe -s [SOURCE] [DEST_DIRECTORY_AND_FILENAME]\n");
+    printf(" or selected files mode:\n");
+    printf("Usage: ShadowDuplicator.exe -s SOURCE [SOURCE2 [SOURCE3] ...] DEST_DIRECTORY\n");
     printf("\n");
-    printf("Multi File Example:  ShadowDuplicator.exe -q BackupConfig.ini\n");
-    printf("Single File Example: ShadowDuplicator.exe -q -s SourceFile.txt D:\\DestDirectory\\DestFile.txt\n");
+    printf("Whole Folder Mode Example:  ShadowDuplicator.exe -q BackupConfig.ini\n");
+    printf("Selected Files Example: ShadowDuplicator.exe -q -s SourceFile.txt SourceFile2.txt D:\\DestDirectory\n");
     printf("\n");
     printf("\n");
     printf("\n");
     printf("Options:\n");
     printf("-h, --help, -?, /?, --usage     Print this help message\n");
     printf("-q                              Silence the banner and any progress messages\n");
-    printf("-s, --singlefile                Single file mode -- copy one source file to the destination directory only\n");
+    printf("-s, --selected                  Selected files mode -- copy source files to the destination directory (the last command line argument)\n");
     printf("\n");
-    printf("The path to the INI file must not begin with '-'.\n");
+    printf("The path to the INI file or any source file must not begin with '-'.\n");
     printf("The INI file should be as follows:\n\n");
     printf("[FileSet]\nSource = C:\\Users\\Public\\Documents\nDestination = D:\\test\n");
     printf("Do not include trailing slashes in paths.\n");
     printf("\n");
-    printf("In single-file mode, you must provide the full destination path, including destination file name in the\n");
-    printf("directory.\n");
+    printf("In selected-files mode, you must provide the destination directory path only.\n");
     printf("\n");
-    printf("WARNING: Copies will always overwrite items in the destination.\n");
+    printf("WARNING: Copies will always overwrite items in the destination without confirmation.\n");
+    printf("\n");
+    printf("Exit codes:\n");
+    printf("If a Win32 error is raised (i.e. an error copying files), this will be the exit code.\n");
+    printf("https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-\n");
+    printf("\n");
+    printf("Exit code will be 0 if all copy operations succeeded and the backup can be considered\n");
+    printf("a success.\n");
+    printf("\n");
+    printf("Custom exit codes:\n");
+    printf("0x20000001 | 536870913 | No destination directory specified on command line.\n");
+    printf("0x20000002 | 536870914 | Could not find any files in the source directory.\n");
+    printf("0x20000003 | 536870915 | No source file or directory specified on command line.\n");
+    printf("0x20000004 | 536870916 | All source files must be on the same volume. This error\n");
+    printf("           |           | is returned if this constraint is violated.\n");
+    printf("0x20000005 | 536870917 | The command line arguments were not understood.\n");
 }
 
 /// <summary>
