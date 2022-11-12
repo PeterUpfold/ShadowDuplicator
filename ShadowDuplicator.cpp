@@ -372,10 +372,8 @@ int wmain(int argc, WCHAR** argv)
     do {
         assert(currentSourceFilename->source != nullptr);
         if (!PathFileExistsW(currentSourceFilename->source)) {
-            error = GetLastError();
-            if (error) {
-                friendlyError(L"The source file does not seem to exist.", error); //friendlyError will bail //TODO say which file
-            }
+            wprintf(L"The source file \"%s\" does not seem to exist. 0x%x\n", currentSourceFilename->source, GetLastError());
+            bail(GetLastError());
         }
         currentSourceFilename = currentSourceFilename->next;
     } while (currentSourceFilename != nullptr);
