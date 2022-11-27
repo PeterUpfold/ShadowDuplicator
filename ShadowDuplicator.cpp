@@ -23,7 +23,7 @@ is no warranty.
 
 #define assert(expression) if (!(expression)) { printf("assert on %d", __LINE__); bail(250); }
 
-#define SDVERSION L"v0.5"
+#define SDVERSION L"v0.6"
 
 // A linked list of source drives or source paths
 typedef struct sourceList {
@@ -234,15 +234,16 @@ int wmain(int argc, WCHAR** argv)
 
                     if (!GetVolumePathNameW(argv[i], currentSourceDrive->source, MAX_PATH)) {
                         error = GetLastError();
-                        if (error) {
-                            friendlyError(L"Failed to get Source Drive from Source Directory", error);
-                        }
+                        friendlyError(L"Failed to get Source Drive from Source Directory", error);
                     }
 
                     // copy filename into filename buffer
                     currentSourceFilename->source = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
                     assert(currentSourceFilename->source != nullptr);
-                    StringCbPrintf(currentSourceFilename->source, MAX_PATH * sizeof(WCHAR), argv[i]);
+                    if (!GetFullPathNameW(argv[i], MAX_PATH, currentSourceFilename->source, nullptr)) {
+                        error = GetLastError();
+                        friendlyError(L"Failed to get source path from source file", error);
+                    }
 
                     // now set the previous item's pointer to point to these items
                     if (previousSourceDrive != nullptr) {
@@ -774,7 +775,7 @@ DWORD ShadowCopyFile(WCHAR  sourcePathFile[MAX_PATH], WCHAR  destinationPathFile
 
 /// <summary>
 /// Display a formatted error string, looking up the Win32 error code and displaying
-/// its explanation.
+/// its explanation, then bail out of the application.
 /// </summary>
 /// <param name="ourErrorDescription">The ShadowDuplicator error description</param>
 /// <param name="error">The error code as returned from GetLastError()</param>
