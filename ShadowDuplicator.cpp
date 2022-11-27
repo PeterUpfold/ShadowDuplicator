@@ -342,6 +342,7 @@ int wmain(int argc, WCHAR** argv)
                         friendlyError(L"Failed to get Source Drive from Source Directory", error);
                     }
                 }
+                break;
             }
         }
     }
