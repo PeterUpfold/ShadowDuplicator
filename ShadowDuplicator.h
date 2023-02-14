@@ -1,7 +1,7 @@
 /* ShadowDuplicator -- a simple VC++ Volume Shadow Copy requestor for backing up
 locked files
 
-Copyright (C) 2021-22 Peter Upfold.
+Copyright (C) 2021-2023 Peter Upfold.
 
 Licensed under the Apache 2.0 Licence. See the LICENSE file in the project root for details.
 
