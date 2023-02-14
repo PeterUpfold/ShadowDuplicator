@@ -23,7 +23,7 @@ is no warranty.
 
 #define assert(expression) if (!(expression)) { printf("assert on %d", __LINE__); bail(250); }
 
-#define SDVERSION L"v0.6"
+#define SDVERSION L"v0.7"
 
 // A linked list of source drives or source paths
 typedef struct sourceList {
@@ -336,7 +336,7 @@ int wmain(int argc, WCHAR** argv)
                 currentSourceDrive->source = (LPWSTR)malloc(MAX_PATH * sizeof(WCHAR));
                 assert(currentSourceDrive->source != nullptr);
 
-                if (!GetVolumePathNameW(argv[i], currentSourceDrive->source, MAX_PATH)) {
+                if (!GetVolumePathNameW(currentSourceFilename->source, currentSourceDrive->source, MAX_PATH)) {
                     error = GetLastError();
                     if (error) {
                         friendlyError(L"Failed to get Source Drive from Source Directory", error);
