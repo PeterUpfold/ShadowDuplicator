@@ -1038,7 +1038,7 @@ void banner(void) {
     
     
     printf("%s\n", banner);
-    printf("ShadowDuplicator -- Copyright (C) 2021-2022 Peter Upfold\n");
+    printf("ShadowDuplicator -- Copyright (C) 2021-2023 Peter Upfold\n");
     wprintf(SDVERSION);
     printf("\n\n");
     printf("https://peter.upfold.org.uk/projects/shadowduplicator\n");
