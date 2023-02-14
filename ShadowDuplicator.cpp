@@ -1050,7 +1050,7 @@ void banner(void) {
 /// </summary>
 /// <param name=""></param>
 void usage(void) {
-    printf("ShadowDuplicator -- Copyright (C) 2021-2022 Peter Upfold\n");
+    printf("ShadowDuplicator -- Copyright (C) 2021-2023 Peter Upfold\n");
     wprintf(SDVERSION);
     printf("\n\n");
     printf("Usage: ShadowDuplicator.exe [OPTIONS] INI-FILE\n");
